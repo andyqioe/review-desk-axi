@@ -391,6 +391,11 @@ body.tab-dragging { user-select: none; }
 .primary { border: 0; background: var(--primary); color: #fff; padding: 8px 16px; border-radius: var(--radius-pill); font-weight: 500; font-size: 13px; }
 .primary:hover:not(:disabled) { background: var(--accent); }
 .primary:disabled { opacity: 0.4; cursor: default; }
+/* unavailable but still answers a click with a hint: grey, not a dimmed version of the action colour */
+.primary[aria-disabled="true"] { background: var(--surface-3); color: var(--text-3); cursor: default; }
+.primary[aria-disabled="true"]:hover { background: var(--surface-3); }
+#items input[data-pick].nudge { animation: nudge 0.9s ease-out 2; }
+@keyframes nudge { 30% { outline: 2px solid var(--primary); outline-offset: 2px; } }
 .ghost, .backlog-foot button:not(.primary) { border: 1px solid var(--border-2); background: none; padding: 7px 14px; border-radius: var(--radius-pill); font-size: 13px; color: var(--text-2); }
 .ghost:hover, .backlog-foot button:not(.primary):hover { color: var(--text); border-color: #3f3f46; }
 
