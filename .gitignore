@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 .DS_Store
+# private evals that target a local repository
+skills/analyze-code/evals/

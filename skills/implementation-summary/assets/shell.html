@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<style>
+{{CSS}}
+</style>
+</head>
+<body>
+<main>
+{{BODY}}
+<footer>
+  <span>implementation summary</span>
+  <span>{{META}}</span>
+  <span>generated {{GENERATED}}</span>
+  <span>click any scene to replay it</span>
+</footer>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+{{HIGHLIGHT}}
+</script>
+<script>
+document.querySelectorAll(".changes-bar .ctl[data-act]").forEach((b) => b.addEventListener("click", () => {
+  const open = b.dataset.act === "open";
+  b.closest(".changes").querySelectorAll("details.cfile:not([hidden])").forEach((d) => { d.open = open; });
+}));
+// Origin chips filter rows: one origin at a time, click again to show everything.
+document.querySelectorAll(".changes-bar .ctl.origin").forEach((b) => b.addEventListener("click", () => {
+  const box = b.closest(".changes");
+  const on = b.getAttribute("aria-pressed") !== "true";
+  box.querySelectorAll(".ctl.origin").forEach((x) => x.setAttribute("aria-pressed", String(on && x === b)));
+  box.querySelectorAll("details.cfile").forEach((d) => { d.hidden = on && !d.dataset.origins.split(" ").includes(b.dataset.origin); });
+  box.querySelectorAll(".cgroup").forEach((g) => { g.hidden = !g.querySelector("details.cfile:not([hidden])"); });
+  retally(box, on);
+}));
+// Totals follow the filter: each directory head and the top chips count only the visible rows.
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+function retally(box, filtered) {
+  const sum = (rows) => rows.reduce((t, d) => [t[0] + +d.dataset.adds, t[1] + +d.dataset.dels], [0, 0]);
+  const all = [...box.querySelectorAll("details.cfile")];
+  const shown = all.filter((d) => !d.hidden);
+  const [a, d] = sum(shown);
+  box.querySelector(".tally-files").innerHTML = filtered
+    ? `<b>${shown.length}</b> of ${plural(all.length, "file")}` : `<b>${all.length}</b> ${all.length === 1 ? "file" : "files"}`;
+  box.querySelector(".tally-lines").innerHTML = `<span class="add">+${a}</span> <span class="del">\u2212${d}</span>`;
+  box.querySelectorAll(".cgroup").forEach((g) => {
+    const rows = [...g.querySelectorAll("details.cfile")].filter((r) => !r.hidden);
+    const [ga, gd] = sum(rows);
+    g.querySelector(".cgroup-head .meta").textContent = `${plural(rows.length, "file")} \u00b7 +${ga} \u2212${gd}`;
+  });
+}
+const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: 0 });
+document.querySelectorAll("main > section, main > header").forEach((el) => { el.classList.add("reveal"); io.observe(el); });
+</script>
+<script>
+{{JS}}
+</script>
+<script>
+{{GLOSSARY}}
+</script>
+</body>
+</html>

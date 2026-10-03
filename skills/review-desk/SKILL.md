@@ -32,7 +32,7 @@ Output is TOON; errors print `error:` on stdout (exit 1, usage 2); every write i
 
 `review-desk-axi setup` links the binary into `/opt/homebrew/bin`, writes the reviewer agents (`~/.claude/agents/review-desk-{low,medium,high}.md`, loaded at the next session start) and installs the session hooks and permission in `~/.claude/settings.json`.
 It is idempotent and reports each change; run `setup hooks`, `setup bin` or `setup agents` for one part.
-If the binary is not on PATH yet, call `~/.claude/skills/review-desk/bin/review-desk-axi setup`.
+If the binary is not on PATH yet (a fresh install, for example from `npx skills add`), call `<this skill's base directory>/bin/review-desk-axi setup` first.
 
 ## Open a session
 

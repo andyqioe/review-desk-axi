@@ -1,4 +1,4 @@
-/* Review Desk. Tokens follow ~/.claude/DESIGN.md and implementation-summary/assets/page.css. */
+/* Review Desk. Tokens match implementation-summary/assets/page.css: near-black, indigo, Inter and JetBrains Mono. */
 :root {
   --bg: #050505;
   --surface: #161616;

@@ -1,4 +1,28 @@
-# Review Desk
+<h1 align="center">review-desk-axi</h1>
+<p align="center">
+  <a href="https://github.com/andyqioe/review-desk-axi/actions/workflows/ci.yml"
+    ><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/andyqioe/review-desk-axi/ci.yml?style=flat-square&label=ci"
+  /></a>
+  <a href="https://github.com/andyqioe/review-desk-axi/actions/workflows/release-please.yml"
+    ><img alt="Release" src="https://img.shields.io/github/actions/workflow/status/andyqioe/review-desk-axi/release-please.yml?style=flat-square&label=release"
+  /></a>
+  <a href="#install"
+    ><img alt="Install" src="https://img.shields.io/badge/npx%20skills%20add-andyqioe%2Freview--desk--axi-6366f1?style=flat-square"
+  /></a>
+  <a href="#install"
+    ><img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
+  /></a>
+  <a href="#install"
+    ><img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square"
+  /></a>
+  <a href="https://claude.com/claude-code"
+    ><img alt="Claude Code skill" src="https://img.shields.io/badge/Claude%20Code-skill-d97757?style=flat-square"
+  /></a>
+</p>
+
+<p align="center"><b>Review your agent's change in a real editor, with an AI reviewer that answers every question and never edits code.</b></p>
+
+<p align="center"><img alt="Review Desk in action: select lines, ask, watch the answer stream in, search, open pages, execute the backlog" src="docs/review-desk.gif" width="100%"></p>
 
 A fast, local code review editor for changes made by a coding agent, staffed by a reviewer agent you can talk to.
 
@@ -7,7 +31,7 @@ A long-lived Claude reviewer answers with clickable `path:line` references.
 The reviewer never edits code.
 Everything that should change goes into a durable backlog, which reaches the main agent when you press Execute, when the review ends, or when the reviewer exits.
 
-Review Desk is a [Claude Code](https://claude.com/claude-code) skill with an [AXI](https://axi.md) command-line interface, `review-desk-axi`.
+Review Desk is a [Claude Code](https://claude.com/claude-code) skill with an [AXI](https://axi.md) command-line interface, `review-desk-axi`, installed together with its two companion skills in one command.
 It runs entirely on your machine: a small Python server on `127.0.0.1`, plain HTML/CSS/JS in the browser, and append-only files on disk.
 
 ![The desk: changed files, a diff, and the reviewer's answer with backlog items](docs/screenshots/desk.png)
@@ -67,17 +91,38 @@ When the change was made through the companion `/implementation-summary` skill, 
 
 ## Install
 
+One command installs the whole bundle with the [skills CLI](https://www.npmjs.com/package/skills):
+
+```bash
+npx skills add andyqioe/review-desk-axi --skill '*' -g -a claude-code -y
+```
+
+| Skill | What it does |
+|---|---|
+| `review-desk` | the editor, the reviewer and the backlog described here |
+| `implementation-summary` | after every change, a narrated summary with an animated page (the desk's **Story** tab), then opens the desk |
+| `analyze-code` | `/analyze-code <target>`: call lineage, role, data flow and change impact, optionally as an HTML page with diagrams (the **Analyze code** button) |
+
+Drop `-a claude-code` to choose other agents (Codex, Cursor and more), and drop `-g` to install into the current project only.
+The first time Claude uses the desk it runs `review-desk-axi setup` (below) if the command is not on your `PATH` yet; you can also run it yourself:
+
+```bash
+~/.claude/skills/review-desk/bin/review-desk-axi setup
+```
+
 Requirements:
 
-- Python 3.9 or newer (tested on 3.14) and git.
+- Python 3.9 or newer (tested on 3.9, 3.13 and 3.14) and git.
 - [Claude Code](https://claude.com/claude-code) for the reviewer (`claude` on `PATH`).
 - A browser.
 - Optional: [ripgrep](https://github.com/BurntSushi/ripgrep) for repository search (falls back to `git grep`).
 - Optional: `sandbox-exec` (macOS, built in) or `bwrap` (Linux) for sandboxed page generators.
 
+To work on the code instead, clone the repository and link the three skills:
+
 ```bash
-git clone https://github.com/andyqioe/review-desk-axi ~/.claude/skills/review-desk
-~/.claude/skills/review-desk/bin/review-desk-axi setup
+git clone https://github.com/andyqioe/review-desk-axi ~/review-desk-axi
+for s in review-desk implementation-summary analyze-code; do ln -s ~/review-desk-axi/skills/$s ~/.claude/skills/$s; done
 ```
 
 `setup` is idempotent and reports each change:
@@ -298,20 +343,24 @@ The test suite proves it with `kill -9` in the middle of a write loop.
 ## Files
 
 ```text
-SKILL.md                  the skill's instructions for Claude Code
-bin/review-desk-axi       CLI entry (setup bin links it onto PATH)
-scripts/review_desk.py    the CLI: every command above
-scripts/axi.py            TOON output, help blocks and structured errors
-scripts/store.py          session files, fsync'd appends, backlog and page folds, reviewer presence
-scripts/server.py         loopback HTTP server: the desk, the API, SSE updates, search, pages
-scripts/search.py         Cmd+Shift+F engine: ripgrep (or git grep), path filter, previews
-scripts/reviewer_host.py  the long-lived claude -p reviewer with in-place model and effort switches
-scripts/gitdiff.py        review data from plain git diff when no manifest exists
-scripts/install_agents.py writes the fallback reviewer agents from agents/reviewer.md.tmpl
-agents/host-reviewer.md   the reviewer host's instructions
-assets/desk.{html,css,js} the editor; no build step
-tests/                    end-to-end tests: real server, real CLI, real git repo, kill -9
-evals/                    task evals for the main agent, the reviewer and the live host
+skills/review-desk/                     the desk (this README)
+  SKILL.md                              the skill's instructions for Claude Code
+  bin/review-desk-axi                   CLI entry (setup bin links it onto PATH)
+  scripts/review_desk.py                the CLI: every command above
+  scripts/axi.py                        TOON output, help blocks and structured errors
+  scripts/store.py                      session files, fsync'd appends, backlog and page folds, presence
+  scripts/server.py                     loopback HTTP server: the desk, the API, SSE, search, pages
+  scripts/search.py                     Cmd+Shift+F engine: ripgrep (or git grep), path filter, previews
+  scripts/reviewer_host.py              the long-lived claude -p reviewer, in-place model and effort switches
+  scripts/gitdiff.py                    review data from plain git diff when no manifest exists
+  scripts/install_agents.py             writes the fallback reviewer agents from agents/reviewer.md.tmpl
+  agents/host-reviewer.md               the reviewer host's instructions
+  assets/desk.{html,css,js}             the editor; no build step
+  tests/                                end-to-end tests: real server, real CLI, real git repo, kill -9
+  evals/                                task evals for the main agent, the reviewer and the live host
+skills/implementation-summary/          change map, narrated summary, animated page, desk hand-off
+skills/analyze-code/                    call lineage analysis, figure generator and a worked example
+.github/workflows/                      CI on macOS and Linux, release-please
 ```
 
 A session directory holds `session.json`, `context.md` (the reviewer's briefing), `manifest.json` and `diffs/`, and the append-only `chat.jsonl`, `backlog.jsonl`, `tray.jsonl` and `pages.jsonl`.
@@ -320,13 +369,17 @@ The session store defaults to `~/.review-desk/`.
 ## Tests and evals
 
 ```bash
-cd ~/.claude/skills/review-desk
+cd skills/review-desk
 python3 -m unittest discover -s tests       # end-to-end suite
 python3 -m unittest evals/test_harness.py   # proves every eval discriminates
+cd ../implementation-summary
+python3 -m unittest discover -s tests       # change model and page builder
 ```
+
+CI runs all of it on Linux (Python 3.9 and 3.13) and macOS on every push, and builds analyze-code's worked example to check it has no layout warnings.
 
 The end-to-end suite runs a real server, the real CLI and a real git repository.
 It covers the protocol, the AXI output contract, idempotent writes, token and origin checks, `kill -9` durability, the reviewer host with a fake `claude`, pages and their sandbox, and search.
 
 `evals/` holds eleven task evals for the main agent, the subagent reviewer and the live reviewer host, plus trigger queries.
-A harness seeds a session in an isolated home, plays the user, and grades from the session files, never from a transcript; see [`evals/README.md`](evals/README.md).
+A harness seeds a session in an isolated home, plays the user, and grades from the session files, never from a transcript; see [`skills/review-desk/evals/README.md`](skills/review-desk/evals/README.md).

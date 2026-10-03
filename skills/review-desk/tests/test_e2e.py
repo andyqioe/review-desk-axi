@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -22,7 +23,10 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent
 CLI = [sys.executable, str(SKILL / "scripts" / "review_desk.py")]
-IMPL = Path.home() / ".claude" / "skills" / "implementation-summary" / "scripts" / "build_page.py"
+# the companion skill: beside this one in the bundle, else where Claude Code installs skills
+IMPL = next((p for p in (SKILL.parent / "implementation-summary" / "scripts" / "build_page.py",
+                        Path.home() / ".claude" / "skills" / "implementation-summary" / "scripts" / "build_page.py") if p.exists()),
+            SKILL.parent / "implementation-summary" / "scripts" / "build_page.py")
 sys.path.insert(0, str(SKILL / "scripts"))
 
 
@@ -608,6 +612,29 @@ class GitDiffTest(unittest.TestCase):
             self.assertEqual((by["blob.bin"]["binary"], by["blob.bin"]["adds"], by["blob.bin"]["hunks"]), (True, 0, []))
             rows = json.loads((Path(t) / "out" / "diffs" / f"{by['blob.bin']['n']}.json").read_text())["rows"]
             self.assertEqual(rows, [])
+
+
+class SearchFallbackTest(unittest.TestCase):
+    def test_git_grep_fallback_matches_ripgrep(self):
+        import search
+        with tempfile.TemporaryDirectory() as t:
+            repo = make_repo(Path(t))
+            rows = lambda spec, files: [(r["path"], r["line"], r["ranges"]) for r in search.run(repo, spec, files, {})  # noqa: E731
+                                        if r["t"] == "m"]
+            want = rows(search.Spec("split_row"), None) if shutil.which("rg") else None
+            real = search.shutil.which
+            search.shutil.which = lambda name: None if name == "rg" else real(name)  # as on a machine without ripgrep
+            try:
+                got = rows(search.Spec("split_row"), None)
+                changed = rows(search.Spec("SPLIT_ROW"), ["src/parse.py"])
+                bad = list(search.run(repo, search.Spec("ses(sion", regex=True), None, {}))[-1]
+            finally:
+                search.shutil.which = real
+            self.assertEqual([g[0] for g in got], ["src/parse.py"])
+            self.assertEqual(changed, got, "case-insensitive by default, and an explicit file list works")
+            if want is not None:
+                self.assertEqual(got, want, "git grep finds the same lines and ranges as ripgrep")
+            self.assertEqual(bad["t"], "error")
 
 
 class DurabilityTest(unittest.TestCase):

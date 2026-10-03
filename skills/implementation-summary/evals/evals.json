@@ -1,0 +1,55 @@
+{
+  "skill_name": "implementation-summary",
+  "evals": [
+    {
+      "id": 1,
+      "name": "todo-due-dates",
+      "fixture": "todo-cli",
+      "prompt": "add due dates to my todo cli - `todo add \"title\" --due 2026-10-05` should store it, `list` should show the date, and I want a `list --overdue` filter that only shows undone items past their due date. keep the existing tests passing and add tests for the new stuff",
+      "expected_output": "Single-feature summary: thesis in behavior terms, a scene of the add/list flow with the overdue filter marked new, 1-2 real code excerpts with accurate path:line links, honest test results, companion page built.",
+      "files": [
+        "fixtures/todo-cli"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "shortener-ratelimit-ttl",
+      "fixture": "shortener",
+      "prompt": "two things for the shortener: (1) rate limit POST /shorten per client IP with a token bucket, 5 requests burst refilling 1/sec, return 429 with a retry-after header when empty. (2) let callers pass ttlSeconds when shortening; after it expires GET should return 410 gone instead of redirecting. add tests for both with node:test, no new deps",
+      "expected_output": "Multi-feature summary: constellation scene relating the two features to the server, a short story per feature with code excerpts and links, test results, companion page.",
+      "files": [
+        "fixtures/shortener"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "csv-quoted-commas-refactor",
+      "fixture": "csv-ingest",
+      "prompt": "users keep reporting that customers with a comma in their name or city (like \"Smith, John\") vanish from staging after ingest. fix that. while you're in there, move the row parsing out of ingest.py into its own parse module and delete the dead legacy_retry helper. sample.csv has an example",
+      "expected_output": "Fix + refactor + removal summary: before/after scene with the break at the root cause, removal shown, the fix's key lines excerpted, honest verification including a run against sample.csv, companion page.",
+      "files": [
+        "fixtures/csv-ingest"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "large-branch-recap",
+      "fixture": "generated:tests/fixture.py",
+      "prompt": "i've been hacking on this branch for a while and lost track. recap everything that changed vs main - committed, staged, the uncommitted stuff, new files, all of it. i want to review it tomorrow",
+      "expected_output": "Large-change summary over ~300 files: per-directory rollup drives the stories, an 'Also changed' sentence covers the rest, the Every change block lists every changed file including renames (old -> new), the plain mv pairing, deletions, binaries, the mode change and symlinks; companion page renders every file under Every change; no .lavish or ignored files listed.",
+      "files": [
+        "tests/fixture.py"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "review-desk-flow",
+      "fixture": "csv-ingest",
+      "prompt": "users keep reporting that customers with a comma in their name (like \"Smith, John\") vanish after ingest. fix it. then let me review it with you: I'll ask a couple of questions, switch the reviewer model once, and execute one backlog item",
+      "expected_output": "Summary built with --review-data; Review Desk opened on the .review folder with the code moments pinned; one AskUserQuestion for model and effort; reviewer spawned in the background (review-desk-<effort>, or general-purpose with `review-desk-axi prompt` when the type is not loaded); turn ends with the desk URL and no polling. On HANDOFF the main agent acks the items and respawns the wanted tier without asking; on EXECUTE it implements only the named items, marks them done with notes, rebuilds into the same .review folder, runs `review-desk-axi reload`, and respawns; `review-desk-axi inbox` is empty at the end.",
+      "files": [
+        "fixtures/csv-ingest"
+      ]
+    }
+  ]
+}
