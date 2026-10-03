@@ -372,14 +372,25 @@ function closeTab(path) {
 }
 
 // ------------------------------------------------------------------ code
+// A request that never reached the server (it is restarting) resolves to OFFLINE and is not cached, so the
+// view recovers once the server is back; only a real answer ("not readable") is remembered.
+const OFFLINE = false;
+const unreachable = (err) => err instanceof TypeError;  // fetch rejects with TypeError when nothing answers
 async function getDiff(f) {
-  if (!S.diffs.has(f.n)) S.diffs.set(f.n, api(`diff/${f.n}`).then((d) => d.rows || []).catch(() => []));
+  if (!S.diffs.has(f.n)) {
+    S.diffs.set(f.n, api(`diff/${f.n}`).then((d) => d.rows || [])
+      .catch((err) => { if (unreachable(err)) { S.diffs.delete(f.n); return OFFLINE; } return []; }));
+  }
   return S.diffs.get(f.n);
 }
 async function getFile(path) {
-  if (!S.files.has(path)) S.files.set(path, api(`file?path=${encodeURIComponent(path)}`).then((d) => d.lines).catch(() => null));
+  if (!S.files.has(path)) {
+    S.files.set(path, api(`file?path=${encodeURIComponent(path)}`).then((d) => d.lines)
+      .catch((err) => { if (unreachable(err)) { S.files.delete(path); return OFFLINE; } return null; }));
+  }
   return S.files.get(path);
 }
+const OFFLINE_NOTE = '<p class="empty">The desk server is not answering (it may be restarting). This view reloads when it is back.</p>';
 
 function editorHref(path, line) {
   const ed = (S.state && S.state.session.editor) || "vscode";
@@ -425,6 +436,7 @@ async function renderCode(opts = {}) {
   if (S.view === "diff" && f) {
     const rows = await getDiff(f);
     if (S.active !== path) return;
+    if (rows === OFFLINE) { box.innerHTML = OFFLINE_NOTE; return refreshFind(); }
     if (!rows.length) html = '<p class="empty">No line changes (binary, mode or rename only).</p>';
     else if (S.layout === "split") html = splitHtml(rows);
     else {
@@ -443,9 +455,10 @@ async function renderCode(opts = {}) {
   } else {
     const lines = await getFile(path);
     if (S.active !== path) return;
+    if (lines === OFFLINE) { box.innerHTML = OFFLINE_NOTE; return refreshFind(); }
     if (!lines) { box.innerHTML = '<p class="empty">This file cannot be shown (missing, binary or too large).</p>'; return refreshFind(); }
     const changed = new Set();
-    if (f) (await getDiff(f)).forEach((r) => { if (r[3] === "add") changed.add(+r[1]); });
+    if (f) ((await getDiff(f)) || []).forEach((r) => { if (r[3] === "add") changed.add(+r[1]); });
     box.innerHTML = '<div class="rows file-view">' + lines.map((t, i) =>
       `<div class="row${changed.has(i + 1) ? " add" : ""}" data-n="${i + 1}"><span class="no" data-side="new">${i + 1}</span><span class="tx">${esc(t) || "​"}</span></div>`).join("") + "</div>";
     box.dataset.path = path;
@@ -880,8 +893,17 @@ function renderBacklog() {
       `${i.detail && i.detail !== i.title ? `<div class="detail">${esc(i.detail)}</div>` : ""}${patch}` +
       `${i.note ? `<div class="detail">main: ${esc(i.note)}</div>` : ""}<div class="acts">${acts}</div></div></li>`;
   }).join("") : '<li class="empty">Nothing yet. Flags, suggested edits and issues the reviewer finds land here, and reach the main agent on Execute or when the reviewer exits.</li>';
-  $("#exec-sel").disabled = !S.picked.size;
+  syncExecSel();
   $("#exec-all").disabled = !items.some(openish);
+}
+
+// "Execute selected" stays clickable while nothing is ticked: a disabled button swallows the click without a
+// word, and users took that for a broken desk. It counts the selection and explains itself instead.
+function syncExecSel() {
+  const b = $("#exec-sel"), n = S.picked.size;
+  b.setAttribute("aria-disabled", String(!n));
+  b.textContent = n ? `Execute ${n} selected` : "Execute selected";
+  b.title = n ? `Execute ${[...S.picked].join(", ")}` : "Tick the items to execute first";
 }
 
 // Where the latest Execute or End stands. The main agent gets it from its hooks while it works, or from its
@@ -1268,7 +1290,7 @@ function wire() {
     const c = e.target.closest("[data-pick]");
     if (!c) return;
     c.checked ? S.picked.add(c.dataset.pick) : S.picked.delete(c.dataset.pick);
-    $("#exec-sel").disabled = !S.picked.size;
+    syncExecSel();
   });
   $("#items").addEventListener("click", async (e) => {
     const d = e.target.closest("[data-dismiss], [data-reopen]");
@@ -1280,11 +1302,18 @@ function wire() {
     try {
       const r = await post("execute", { ids });
       S.picked.clear();
+      syncExecSel();
       toast(`Execute requested for ${r.ids.join(", ")}`);  // the delivery line says whether it reached anyone
       refresh();
     } catch (err) { toast(err.message, true); }
   };
-  $("#exec-sel").addEventListener("click", () => execute([...S.picked]));
+  $("#exec-sel").addEventListener("click", () => {
+    if (S.picked.size) return execute([...S.picked]);
+    toast("Tick the items to execute first, or press Execute all open");
+    const boxes = $$("#items input[data-pick]");
+    boxes.forEach((b) => { b.classList.remove("nudge"); void b.offsetWidth; b.classList.add("nudge"); });  // restart the flash
+    boxes[0]?.focus();
+  });
   $("#delivery").addEventListener("click", (e) => {
     const b = e.target.closest("[data-copy]");
     if (b) navigator.clipboard.writeText(b.dataset.copy).then(() => toast("Copied: paste it into your agent"), () => toast("Copy failed", true));
@@ -1922,13 +1951,26 @@ function goldenSide(layout) {
   setWidth("side", shared / (1 + PHI));
 }
 
+// Saved widths come from whatever window they were dragged in. Restored into a narrower one they could take
+// the whole width and leave the editor (story, pages, code) at 0 px, an empty desk in that browser profile
+// only. Fit them on load and on every resize; the saved values stay, so a wider window gets them back.
+function fitLayout(layout) {
+  if (window.innerWidth <= 900) return;  // the narrow layout stacks the panels
+  if (layout.side) setWidth("side", layout.side);
+  if (layout.rail) setWidth("rail", layout.rail);
+  if (layout.side) setWidth("side", layout.side);  // again, now against the fitted files panel
+  goldenSide(layout);
+}
+
 function wireLayout() {
   const code = $("#code");
   new ResizeObserver(() => code.style.setProperty("--code-w", `${code.clientWidth}px`)).observe(code);
   const layout = loadLayout();
   applyLayout(layout);
   const desk = $("#desk");
-  goldenSide(layout);
+  fitLayout(layout);
+  let fitTimer = 0;
+  window.addEventListener("resize", () => { clearTimeout(fitTimer); fitTimer = setTimeout(() => fitLayout(layout), 60); });
   $$(".split").forEach((h) => {
     const which = h.dataset.split;
     h.addEventListener("pointerdown", (e) => {
@@ -2006,7 +2048,17 @@ function connect() {
     try { const d = JSON.parse(ev.data); S.draft = d && d.reply_to ? d : null; } catch (_) { S.draft = null; }
     renderDraft();
   });
-  es.onerror = () => { const el = $("#presence"); el.dataset.state = "offline"; $(".label", el).textContent = "desk server offline"; };
+  es.onerror = () => { S.offline = true; const el = $("#presence"); el.dataset.state = "offline"; $(".label", el).textContent = "desk server offline"; };
+  es.onopen = () => { if (S.offline) { S.offline = false; recoverFromOutage(); } };
+}
+
+// The server went away (a restart after an upgrade) and came back. A frame that tried to load meanwhile shows
+// the browser's error page and never retries, so reload every page frame and the story, then redraw.
+function recoverFromOutage() {
+  $$("#panes .page-frame").forEach((f) => { f.src = f.src; });
+  const story = $("#story");
+  if (story.src) story.src = story.src;
+  refresh().then(() => { if (S.active !== "story" && !isPage(S.active)) renderCode(); });
 }
 
 wire();
