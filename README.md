@@ -22,7 +22,7 @@
 
 <p align="center"><b>Review your agent's change in a real editor, with an AI reviewer that answers every question and never edits code.</b></p>
 
-<p align="center"><img alt="Review Desk in action: select lines, ask, watch the answer stream in, search, open pages, execute the backlog" src="docs/review-desk.gif" width="100%"></p>
+<p align="center"><img alt="Review Desk in action: select lines, ask, watch the answer stream in, search, open pages, execute the backlog" src="docs/review-desk.webp" width="100%"></p>
 
 A fast, local code review editor for changes made by a coding agent, staffed by a reviewer agent you can talk to.
 

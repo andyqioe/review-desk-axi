@@ -214,7 +214,8 @@ def branch_at(repo: Path, when: dt.datetime) -> str | None:
         moved = re.match(r"checkout: moving from .+ to (.+)$", msg)
         if not (m and moved):
             continue
-        at = dt.datetime.fromisoformat(m.group(1)).astimezone().replace(tzinfo=None)
+        stamp = m.group(1)  # Python before 3.11 rejects a trailing Z
+        at = dt.datetime.fromisoformat(stamp[:-1] + "+00:00" if stamp.endswith("Z") else stamp).astimezone().replace(tzinfo=None)
         if at <= when:
             return moved.group(1)
     return None
