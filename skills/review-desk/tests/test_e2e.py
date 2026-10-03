@@ -491,6 +491,23 @@ class DeliveryTest(Desk):
             self.assertEqual(self.rd_full("hook", event, input="not json")[0], 0)
 
 
+class FirstWatchTest(Desk):
+    """A watch started after the user pressed Execute still delivers it: watch and the hooks read the same
+    pending events, so an Execute is never stranded because no watch was running at the time."""
+
+    def test_execute_pressed_before_the_first_watch_is_delivered(self):
+        import store
+        self.assertIsNone(store.open_session(self.sid).meta().get("main_cursor"), "a desk nobody has watched yet")
+        self.rd("backlog", self.sid, "add", "--title", "pressed before any watch")
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B1"]})[0], 200)
+        out = self.rd("watch", self.sid, "--timeout", "5")
+        self.assertIn("event: EXECUTE", out)
+        self.assertIn("pressed before any watch", out)
+        d = store.open_session(self.sid).meta()["delivered"]
+        self.assertEqual(d["via"], "watch")
+        self.assertIn("event: TIMEOUT", self.rd("watch", self.sid, "--timeout", "1"), "delivered once")
+
+
 class ReviewerHostTest(Desk):
     """One long-lived reviewer: tier changes apply in place, watch wakes the main agent, restarts resume."""
 

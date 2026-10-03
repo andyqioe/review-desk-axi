@@ -778,24 +778,20 @@ def cmd_reviewer(a) -> int:
 def cmd_watch(a) -> int:
     """Block until the main agent has something to do: Execute, End, or the reviewer exiting."""
     s = session(a.sid)
-    m = s.meta()
-    cursor = m.get("main_cursor")
-    if cursor is None:
-        cursor = s.chat()[-1]["seq"] if s.chat() else 0
     deadline = time.time() + a.timeout
     event = None
+    seq = None
     beat = 0.0
     while time.time() < deadline and event is None:
         if time.time() - beat > 10:  # the desk shows "waking the main agent" only while this is fresh
             s.update_meta(watcher={"pid": os.getpid(), "at": store.now()})
             beat = time.time()
-        cursor = max(cursor, s.meta().get("main_cursor") or 0)  # a hook may have delivered it already
-        entries = s.chat()
-        for e in entries:
-            if e["seq"] > cursor and e.get("role") == "user" and e["kind"] in ("execute", "end"):
-                event = "EXECUTE" if e["kind"] == "execute" else "END"
-                cursor = e["seq"]
-                break
+        # the same pending list the hooks deliver from: an Execute pressed before this watch started is still
+        # waiting, and one a hook already delivered is not
+        pending = s.pending_events()
+        if pending:
+            event = "END" if any(e["kind"] == "end" for e in pending) else "EXECUTE"
+            seq = max(e["seq"] for e in pending)
         if event is None and s.meta().get("status") == "ended":
             event = "END"
         ag = s.agent()
@@ -809,10 +805,8 @@ def cmd_watch(a) -> int:
         help_block([watch_hint(s.sid) + " again"])
         return 0
     kv("event", event)
-    if event in ("EXECUTE", "END"):
-        s.mark_delivered(cursor, "watch")
-    else:
-        s.update_meta(main_cursor=cursor)
+    if seq is not None:
+        s.mark_delivered(seq, "watch")
     return_code = cmd_handoff(a)
     if event == "EXECUTE":
         help_block(["Implement exactly the execute_requested items; done <id> --note after each",
