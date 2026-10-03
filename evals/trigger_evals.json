@@ -1,0 +1,22 @@
+[
+  {"query": "ok the auth refactor is done but i havent read any of it yet. can you open it up somewhere i can click through the diff and ask you questions as i go? use something cheap for the questions, haiku is fine", "should_trigger": true},
+  {"query": "review the changes with me before i commit - i want to go file by file and flag anything sketchy, and you fix what i flag afterwards", "should_trigger": true},
+  {"query": "resume yesterday's review on the payments branch, i had some open questions in the desk that nobody answered", "should_trigger": true},
+  {"query": "can i get a proper review UI for the uncommitted stuff in ~/code/ledger? like a diff viewer with a chat on the side, not a wall of text in the terminal", "should_trigger": true},
+  {"query": "the reviewer bot from earlier went quiet and my backlog items never made it back to you. can you pick them up from session 7c2a91fd?", "should_trigger": true},
+  {"query": "open the review desk on src/scheduler and pin engine.rs acquire() so it's the first thing i see", "should_trigger": true},
+  {"query": "i want to ask a bunch of quick questions about this diff without burning opus tokens on each one - set up something where a smaller model answers and anything real goes to you as a todo", "should_trigger": true},
+  {"query": "let me poke at what you just built. i'll leave comments on specific lines and you batch the fixes when i hit go", "should_trigger": true},
+  {"query": "walk me through the diff interactively, i'll switch to a bigger model if the questions get hard", "should_trigger": true},
+  {"query": "review PR #482 on github and leave inline comments on anything that looks like a correctness bug", "should_trigger": false},
+  {"query": "what does Engine::acquire do and who calls it? trace the call stack for me", "should_trigger": false},
+  {"query": "summarize what you changed in this session, with the code excerpts and links", "should_trigger": false},
+  {"query": "turn this architecture plan into an html page i can annotate in lavish", "should_trigger": false},
+  {"query": "run /code-review high on the current branch and fix whatever it finds", "should_trigger": false},
+  {"query": "git diff main --stat and tell me which files are biggest", "should_trigger": false},
+  {"query": "set up a code review checklist template for my team's pull requests in notion", "should_trigger": false},
+  {"query": "my vscode diff viewer is showing whitespace changes everywhere, how do i hide them", "should_trigger": false},
+  {"query": "mock interview me: i'll implement an lru cache and you review my code like a strict senior engineer", "should_trigger": false},
+  {"query": "explain how three-way merge works when git resolves a conflict", "should_trigger": false},
+  {"query": "which claude model should i use for code review in our ci pipeline, haiku or sonnet? compare cost per PR", "should_trigger": false}
+]

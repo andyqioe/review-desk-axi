@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} · Review Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/desk.css">
+<script>window.DESK = {{CONFIG}};</script>
+</head>
+<body>
+<header class="top">
+  <button type="button" class="icon-btn" id="rail-toggle" aria-controls="rail" aria-expanded="true" title="Hide files (Ctrl/Cmd+B)">
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.3"/><line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" stroke-width="1.3"/><rect class="fill" x="2.2" y="3.2" width="3.1" height="9.6" rx="1.6" fill="currentColor"/></svg>
+  </button>
+  <span class="brand"><span class="glyph">✦</span>review desk</span>
+  <h1 id="title"></h1>
+  <span class="meta" id="meta"></span>
+  <span class="grow"></span>
+  <span class="pill presence" id="presence" data-state="offline"><span class="dot"></span><span class="label">connecting</span></span>
+</header>
+
+<div class="desk" id="desk">
+  <aside class="rail" id="rail">
+    <section class="tray" id="tray-wrap" hidden>
+      <div class="rail-head"><span>pinned by agent</span><span class="count" id="tray-count"></span></div>
+      <ul id="tray"></ul>
+    </section>
+    <section class="tray pages-list" id="pages-wrap" hidden>
+      <div class="rail-head"><span>pages</span><span class="count" id="pages-count"></span></div>
+      <ul id="pages"></ul>
+    </section>
+    <section class="files">
+      <div class="rail-head"><span>changed files</span><span class="count" id="file-count"></span></div>
+      <input id="filter" class="filter" type="search" placeholder="filter files" autocomplete="off" spellcheck="false">
+      <div id="tree" class="tree"></div>
+    </section>
+  </aside>
+
+  <div class="split" id="split-rail" data-split="rail" role="separator" aria-orientation="vertical" aria-label="Resize files panel" tabindex="0"></div>
+  <main class="editor" id="editor">
+    <div class="tabbar" id="tabbar">
+      <nav class="tabs" id="tabs" role="tablist" aria-label="open files"></nav>
+      <button type="button" class="tab-more" id="tab-more" aria-haspopup="menu" aria-expanded="false" title="All open files" hidden></button>
+      <div class="tab-menu" id="tab-menu" role="menu" hidden></div>
+    </div>
+    <div class="toolbar" id="toolbar" hidden>
+      <span class="ro" id="tb-ro" title="Rendered HTML page; read-only">page · read-only</span>
+      <span class="path" id="tb-path"></span>
+      <span class="grow"></span>
+      <button type="button" class="ext" id="tb-reload" title="Reload the page">reload ↻</button>
+      <div class="seg" role="group" aria-label="view">
+        <button type="button" data-view="diff" aria-pressed="true">diff</button>
+        <button type="button" data-view="file" aria-pressed="false">file</button>
+      </div>
+      <div class="seg" role="group" aria-label="layout" id="layout-seg">
+        <button type="button" data-layout="unified" aria-pressed="true">unified</button>
+        <button type="button" data-layout="split" aria-pressed="false">split</button>
+      </div>
+      <button type="button" class="ext" id="tb-render" title="Render this HTML file as a read-only page tab" hidden>render as page</button>
+      <a class="ext" id="tb-open" title="Open in your editor">open ↗</a>
+    </div>
+    <div class="panes" id="panes">
+      <iframe id="story" class="story" title="implementation summary"></iframe>
+      <div id="code" class="code" hidden></div>
+      <div class="find" id="find" role="search" hidden>
+        <input id="find-q" type="text" placeholder="Find in file" autocomplete="off" spellcheck="false" aria-label="Find in file">
+        <span class="find-count" id="find-count" aria-live="polite"></span>
+        <button type="button" class="opt" data-find="case" aria-pressed="false" title="Match case (Alt+C)">Aa</button>
+        <button type="button" class="opt word" data-find="word" aria-pressed="false" title="Whole word (Alt+W)">ab</button>
+        <button type="button" class="opt" data-find="regex" aria-pressed="false" title="Regular expression (Alt+R)">.*</button>
+        <span class="find-sep"></span>
+        <button type="button" data-find="prev" title="Previous match (Shift+Enter)" aria-label="previous match">↑</button>
+        <button type="button" data-find="next" title="Next match (Enter)" aria-label="next match">↓</button>
+        <button type="button" data-find="close" title="Close (Escape)" aria-label="close find">×</button>
+      </div>
+      <div class="ruler" id="ruler" aria-hidden="true"></div>
+      <div class="drop-hint" id="drop-hint">drop to open</div>
+    </div>
+    <div class="selbar" id="selbar" hidden>
+      <span class="sel-label" id="sel-label"></span>
+      <button type="button" data-act="analyze" title="Run /analyze-code on these lines; the reviewer answers in the chat">Analyze code</button>
+      <button type="button" data-act="flag" title="Flag these lines, optionally with a suggested edit">Flag / edit</button>
+      <button type="button" class="x" data-act="clear" aria-label="clear selection">×</button>
+    </div>
+  </main>
+
+  <div class="split" id="split-side" data-split="side" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" tabindex="0"></div>
+  <aside class="side" id="side">
+    <nav class="side-tabs">
+      <button type="button" data-pane="chat" aria-pressed="true">Chat</button>
+      <button type="button" data-pane="backlog" aria-pressed="false">Backlog <span class="badge" id="backlog-count">0</span></button>
+      <span class="grow"></span>
+      <button type="button" id="end" class="end" title="Close the review; the reviewer hands its backlog to the main agent">End review</button>
+    </nav>
+    <section class="chat" id="chat-pane">
+      <ol class="log" id="log"></ol>
+      <form class="composer" id="composer">
+        <div class="anchors" id="anchors"></div>
+        <div class="input-wrap">
+          <ul class="slash" id="slash" role="listbox" hidden></ul>
+          <textarea id="input" rows="3" placeholder="Ask about the change, or type / for a skill. Selected code attaches itself." spellcheck="true"></textarea>
+          <button type="submit" class="primary send" id="send" title="Send (Enter)">Send</button>
+        </div>
+        <div class="tier">
+          <div class="seg small" role="group" aria-label="model" id="models"></div>
+          <div class="seg small" role="group" aria-label="effort" id="efforts"></div>
+        </div>
+      </form>
+    </section>
+    <section class="backlog" id="backlog-pane" hidden>
+      <ol class="items" id="items"></ol>
+      <div class="backlog-foot">
+        <p class="delivery" id="delivery" role="status" aria-live="polite" hidden></p>
+        <button type="button" id="exec-sel" class="primary" disabled>Execute selected</button>
+        <button type="button" id="exec-all">Execute all open</button>
+      </div>
+    </section>
+  </aside>
+</div>
+<div class="search" id="search" role="dialog" aria-label="Search the repository" hidden>
+  <div class="s-bar">
+    <svg class="s-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="10.4" y1="10.4" x2="14" y2="14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <input id="s-q" type="text" placeholder="Search" autocomplete="off" spellcheck="false" aria-label="Search the repository" aria-controls="s-results">
+    <button type="button" class="opt" data-sopt="case" aria-pressed="false" title="Match case (Alt+C)">Aa</button>
+    <button type="button" class="opt word" data-sopt="word" aria-pressed="false" title="Whole word (Alt+W)">ab</button>
+    <button type="button" class="opt" data-sopt="regex" aria-pressed="false" title="Regular expression (Alt+R)">.*</button>
+    <div class="seg small s-scope" role="group" aria-label="scope (Alt+S)" title="Search the change set or the whole repository (Alt+S)">
+      <button type="button" data-scope="changed" aria-pressed="true">changed</button>
+      <button type="button" data-scope="repo" aria-pressed="false">repo</button>
+    </div>
+  </div>
+  <div class="s-paths"><span class="s-label">files</span><input id="s-paths" type="text" placeholder="src/  *.py  !test" autocomplete="off" spellcheck="false" aria-label="Filter paths"></div>
+  <div class="s-status" id="s-status" aria-live="polite"></div>
+  <div class="s-results" id="s-results" role="listbox" tabindex="0" aria-label="Search results"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" defer></script>
+<script src="/assets/desk.js" defer></script>
+</body>
+</html>

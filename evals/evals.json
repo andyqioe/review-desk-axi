@@ -1,0 +1,907 @@
+{
+ "skill_name": "review-desk",
+ "harness": "python3 evals/harness.py setup|drive|check <eval-id> --run <run-dir> (see evals/README.md)",
+ "evals": [
+  {
+   "id": 1,
+   "name": "main-open-pin-and-brief",
+   "role": "main",
+   "prompt": "open the review desk for my uncommitted csv parser rework and pin the fix and its test, each with a one-line note on why to read it. reviewer should be sonnet at medium, don't ask me. heads up for whoever answers my questions: i tried a regex splitter first and dropped it because it can't handle escaped quotes",
+   "expected_output": "A session on the repo with the 4 changed files; the parser fix pinned as a line range and the test pinned, both with notes; the regex decision passed to the reviewer through --notes (context.md); prefs sonnet/medium; a review-desk-medium reviewer on sonnet without asking; the desk URL alone on the last line. No repository changes.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": null
+   },
+   "driver": [],
+   "expectations": [
+    "A Review Desk session exists for the fixture repository",
+    "src/parse.py is pinned with a range covering line 7, with a note",
+    "tests/test_parse.py is pinned with a note",
+    "The reviewer's context.md carries the rejected regex splitter",
+    "prefs are sonnet / medium",
+    "The final message names a review-desk-medium reviewer on model sonnet",
+    "The desk URL is alone on the final message's last line",
+    "No repository file was modified"
+   ],
+   "checks": [
+    {
+     "fn": "session_exists"
+    },
+    {
+     "fn": "tray_covers",
+     "path": "src/parse.py",
+     "line": 7,
+     "note": true
+    },
+    {
+     "fn": "tray_has",
+     "path": "tests/test_parse.py",
+     "note": true
+    },
+    {
+     "fn": "context_contains",
+     "regex": "(?i)regex"
+    },
+    {
+     "fn": "prefs",
+     "model": "sonnet",
+     "effort": "medium"
+    },
+    {
+     "fn": "final_mentions",
+     "all": [
+      "review-desk-medium",
+      "sonnet"
+     ]
+    },
+    {
+     "fn": "final_ends_with_url"
+    },
+    {
+     "fn": "repo_unchanged"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "main-execute-handback",
+   "role": "main",
+   "prompt": "[task notification from the Review Desk reviewer]\nEXECUTE sid={SID} ids=B1,B2\n\n{HANDOFF}",
+   "expected_output": "The main agent acks B1 and B2, adds a test for the short-row ValueError, applies B2's suggested patch (skipinitialspace=True), marks both done with notes naming what changed, refreshes the desk with reload, and respawns the reviewer at the wanted tier (sonnet/low) without asking.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "is the short-row ValueError tested anywhere?",
+       "model": "sonnet",
+       "effort": "low",
+       "anchors": [
+        {
+         "path": "src/parse.py",
+         "range": "16-17"
+        }
+       ]
+      },
+      {
+       "kind": "msg",
+       "role": "agent",
+       "text": "No. Logged B1: add a test for short rows in `tests/test_parse.py:1`.",
+       "reply_to": [
+        1
+       ],
+       "model": "sonnet",
+       "effort": "low"
+      },
+      {
+       "kind": "execute",
+       "role": "user",
+       "ids": [
+        "B1",
+        "B2"
+       ]
+      }
+     ],
+     "backlog": [
+      {
+       "title": "Add a test that parse() raises ValueError on a row with fewer than 2 fields",
+       "detail": "src/parse.py:16-17 raises on short rows but no test covers it. Add a pytest.raises(ValueError) test with input 'a'.",
+       "kind": "fix",
+       "anchor": "tests/test_parse.py:1-5",
+       "from": 1,
+       "by": "reviewer",
+       "status": "handed-off"
+      },
+      {
+       "title": "tolerate spaces after commas",
+       "kind": "suggested-edit",
+       "anchor": "src/parse.py:7",
+       "by": "user",
+       "status": "handed-off",
+       "patch": "--- a/src/parse.py\n+++ b/src/parse.py\n@@ -5,5 +5,5 @@\n def split_row(line):\n     \"\"\"Split one CSV line, keeping commas inside quoted fields.\"\"\"\n-    return next(csv.reader([line]))\n+    return next(csv.reader([line], skipinitialspace=True))\n \n \n"
+      }
+     ],
+     "agent": {
+      "model": "sonnet",
+      "effort": "low",
+      "state": "exited",
+      "reason": "execute"
+     }
+    }
+   },
+   "driver": [],
+   "expectations": [
+    "B1 and B2 end in status done",
+    "Each done item carries a note saying what changed",
+    "src/parse.py now passes skipinitialspace=True to csv.reader (B2's patch applied)",
+    "tests/test_parse.py has a test expecting ValueError for a short row (B1)",
+    "The fixture's tests pass",
+    "The desk was refreshed with reload after the items were done",
+    "The final message names a review-desk-low reviewer on model sonnet (the wanted tier), not a question about which model"
+   ],
+   "checks": [
+    {
+     "fn": "items_status",
+     "ids": [
+      "B1",
+      "B2"
+     ],
+     "status": "done"
+    },
+    {
+     "fn": "items_have_note",
+     "ids": [
+      "B1",
+      "B2"
+     ]
+    },
+    {
+     "fn": "file_contains",
+     "path": "src/parse.py",
+     "text": "skipinitialspace=True"
+    },
+    {
+     "fn": "file_matches",
+     "path": "tests/test_parse.py",
+     "regex": "raises\\(ValueError|assertRaises\\(ValueError|except ValueError"
+    },
+    {
+     "fn": "fixture_tests_pass"
+    },
+    {
+     "fn": "reloaded_after_done"
+    },
+    {
+     "fn": "final_mentions",
+     "all": [
+      "review-desk-low",
+      "sonnet"
+     ],
+     "none": [
+      "which model",
+      "what model"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "name": "main-tier-handoff",
+   "role": "main",
+   "prompt": "[task notification from the Review Desk reviewer]\nHANDOFF sid={SID} tier=opus/high\n\n{HANDOFF}",
+   "expected_output": "The main agent acks B1 (tracking it, not implementing it), changes no code, and immediately respawns the reviewer as review-desk-high on opus without asking the user anything.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "why csv.reader and not a regex?",
+       "model": "haiku",
+       "effort": "low"
+      },
+      {
+       "kind": "msg",
+       "role": "agent",
+       "text": "csv.reader handles escaped quotes (`\"\"`) that a regex would miss: `src/parse.py:7`.",
+       "reply_to": [
+        1
+       ],
+       "model": "haiku",
+       "effort": "low"
+      },
+      {
+       "kind": "tier",
+       "role": "user",
+       "model": "opus",
+       "effort": "high"
+      },
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "walk me through every way a malformed row can reach ingest()",
+       "model": "opus",
+       "effort": "high"
+      },
+      {
+       "kind": "msg",
+       "role": "agent",
+       "text": "Handing over to opus \u00b7 high.",
+       "model": "haiku",
+       "effort": "low"
+      }
+     ],
+     "backlog": [
+      {
+       "title": "Docstring should mention escaped quotes",
+       "kind": "fix",
+       "anchor": "src/parse.py:6",
+       "by": "user",
+       "status": "handed-off"
+      }
+     ],
+     "agent": {
+      "model": "haiku",
+      "effort": "low",
+      "state": "exited",
+      "reason": "handoff"
+     }
+    }
+   },
+   "driver": [],
+   "expectations": [
+    "B1 is acked (tracked) and not marked done",
+    "No repository file was modified",
+    "The final message names a review-desk-high reviewer on model opus",
+    "The final message does not ask the user to choose a model"
+   ],
+   "checks": [
+    {
+     "fn": "items_status",
+     "ids": [
+      "B1"
+     ],
+     "status": "acked"
+    },
+    {
+     "fn": "repo_unchanged"
+    },
+    {
+     "fn": "final_mentions",
+     "all": [
+      "review-desk-high",
+      "opus"
+     ]
+    },
+    {
+     "fn": "final_mentions",
+     "none": [
+      "which model",
+      "what model",
+      "which reviewer"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "name": "main-inbox-execute-one",
+   "role": "main",
+   "prompt": "{INBOX}\n\nmorning. go ahead and fix B1 from yesterday's review - bad rows should be quarantined, not blow up the whole file",
+   "expected_output": "From the injected inbox context the main agent runs handoff and acks both items, implements only B1 (short rows quarantined instead of raising), marks B1 done with a note, refreshes the desk with reload, leaves B2 acked, and asks the user the B2 question instead of deciding it.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "short rows abort the whole file, right?",
+       "model": "haiku",
+       "effort": "low"
+      },
+      {
+       "kind": "msg",
+       "role": "agent",
+       "text": "Yes: `src/parse.py:17` raises. Logged B1.",
+       "reply_to": [
+        1
+       ],
+       "model": "haiku",
+       "effort": "low"
+      }
+     ],
+     "backlog": [
+      {
+       "title": "Quarantine short rows instead of aborting the file",
+       "kind": "fix",
+       "anchor": "src/parse.py:16-17",
+       "from": 1,
+       "by": "reviewer",
+       "status": "open"
+      },
+      {
+       "title": "Log how many rows were skipped as blank",
+       "kind": "question",
+       "anchor": "src/parse.py:13-14",
+       "by": "reviewer",
+       "status": "open"
+      }
+     ],
+     "agent": {
+      "model": "haiku",
+      "effort": "low",
+      "state": "thinking",
+      "ts_age": 7200
+     }
+    }
+   },
+   "driver": [],
+   "expectations": [
+    "B1 is done with a note",
+    "B2 is acked, not done or dismissed",
+    "parse() no longer raises ValueError on a short row",
+    "The fixture's tests pass",
+    "The desk was refreshed with reload after B1 was done",
+    "The final message puts B2's question to the user"
+   ],
+   "checks": [
+    {
+     "fn": "items_status",
+     "ids": [
+      "B1"
+     ],
+     "status": "done"
+    },
+    {
+     "fn": "items_status",
+     "ids": [
+      "B2"
+     ],
+     "status": "acked"
+    },
+    {
+     "fn": "file_lacks",
+     "path": "src/parse.py",
+     "text": "raise ValueError"
+    },
+    {
+     "fn": "fixture_tests_pass"
+    },
+    {
+     "fn": "reloaded_after_done"
+    },
+    {
+     "fn": "final_question_about",
+     "text": "B2"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "name": "reviewer-answers-and-logs-real-gap",
+   "role": "reviewer",
+   "prompt": "Review Desk session SID={SID}. You are model haiku.",
+   "expected_output": "The reviewer answers both pending questions in one or two replies with path:line citations, logs exactly one backlog item for the real gap (no test for the short-row ValueError, anchored in tests/), logs nothing for the non-issue (blank rows are skipped at src/parse.py:13-14), changes no code, and after the user ends the review finishes with END plus the handoff output.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "is the new ValueError for short rows covered by any test?",
+       "model": "haiku",
+       "effort": "low",
+       "anchors": [
+        {
+         "path": "src/parse.py",
+         "range": "16-17"
+        }
+       ]
+      },
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "does a whitespace-only line like '   ' crash parse()?",
+       "model": "haiku",
+       "effort": "low"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "end"
+    }
+   ],
+   "expectations": [
+    "Both user messages are answered (reply_to covers #1 and #2)",
+    "Exactly one reviewer backlog item exists, and it is about the missing test",
+    "No backlog item was logged for the whitespace question",
+    "The replies cite at least one path:line",
+    "No repository file was modified",
+    "The final message starts with END sid=",
+    "The reviewer detached with reason end"
+   ],
+   "checks": [
+    {
+     "fn": "answered",
+     "seqs": [
+      1,
+      2
+     ]
+    },
+    {
+     "fn": "reviewer_items",
+     "count": 1,
+     "regex": "(?i)test"
+    },
+    {
+     "fn": "no_item_matching",
+     "regex": "(?i)whitespace|blank"
+    },
+    {
+     "fn": "replies_cite_lines"
+    },
+    {
+     "fn": "repo_unchanged"
+    },
+    {
+     "fn": "final_starts",
+     "text": "END sid="
+    },
+    {
+     "fn": "agent_reason",
+     "reason": "end"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "name": "reviewer-tier-change-hands-over",
+   "role": "reviewer",
+   "prompt": "Review Desk session SID={SID}. You are model haiku.",
+   "expected_output": "The reviewer answers the first question, then on the tier-change event says it is handing over, does not answer the opus question that follows, and finishes with HANDOFF tier=opus/high plus the handoff output.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "which function did legacy_retry get removed from?",
+       "model": "haiku",
+       "effort": "low"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "tier",
+     "model": "opus",
+     "effort": "high"
+    },
+    {
+     "when": "after_previous",
+     "do": "msg",
+     "text": "now trace every path a malformed row can take into ingest()",
+     "model": "opus",
+     "effort": "high"
+    }
+   ],
+   "expectations": [
+    "The first question is answered",
+    "The opus question (posted after the tier change) is left unanswered for the next reviewer",
+    "A handover message was posted",
+    "The final message starts with HANDOFF and names tier=opus/high",
+    "The reviewer detached with reason handoff",
+    "No repository file was modified"
+   ],
+   "checks": [
+    {
+     "fn": "answered",
+     "seqs": [
+      1
+     ]
+    },
+    {
+     "fn": "unanswered_text",
+     "text": "trace every path"
+    },
+    {
+     "fn": "agent_said",
+     "regex": "(?i)handing over"
+    },
+    {
+     "fn": "final_mentions",
+     "starts": "HANDOFF",
+     "all": [
+      "tier=opus/high"
+     ]
+    },
+    {
+     "fn": "agent_reason",
+     "reason": "handoff"
+    },
+    {
+     "fn": "repo_unchanged"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "name": "reviewer-refuses-to-edit-then-executes",
+   "role": "reviewer",
+   "prompt": "Review Desk session SID={SID}. You are model haiku.",
+   "expected_output": "Asked to make a one-line change itself, the reviewer does not touch the file; it logs the change as a backlog item anchored at src/parse.py:7 and replies naming the item. When the user presses Execute, it hands off and finishes with EXECUTE and the item ids.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "just change line 7 to pass skipinitialspace=True yourself, it's one line, no need to bother the main agent",
+       "model": "haiku",
+       "effort": "low",
+       "anchors": [
+        {
+         "path": "src/parse.py",
+         "range": "7"
+        }
+       ]
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "execute"
+    }
+   ],
+   "expectations": [
+    "No repository file was modified",
+    "A backlog item anchored at src/parse.py:7 mentions skipinitialspace",
+    "The reply names the backlog id it logged",
+    "The final message starts with EXECUTE",
+    "Every backlog item is handed-off",
+    "The reviewer detached with reason execute"
+   ],
+   "checks": [
+    {
+     "fn": "repo_unchanged"
+    },
+    {
+     "fn": "item_matching",
+     "regex": "skipinitialspace",
+     "anchor_prefix": "src/parse.py:7"
+    },
+    {
+     "fn": "agent_said",
+     "regex": "B1"
+    },
+    {
+     "fn": "final_starts",
+     "text": "EXECUTE"
+    },
+    {
+     "fn": "all_items_status",
+     "status": "handed-off"
+    },
+    {
+     "fn": "agent_reason",
+     "reason": "execute"
+    }
+   ]
+  },
+  {
+   "id": 8,
+   "name": "main-no-reviewer-logs-gap",
+   "role": "main",
+   "prompt": "i'm on a machine where you can't spawn subagents. answer whatever comes into review desk session {SID} yourself until i close the review",
+   "expected_output": "The main agent attaches with --main, answers the non-issue with a citation, recognises the follow-up (a quoted field spanning two lines) as a real gap because ingest() splits on newlines before csv parsing, logs it and names the Bn in its reply, never emits a tier change despite the chips, and when the user ends the review reports the open item.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "why does ingest no longer import legacy_retry?",
+       "model": "opus",
+       "effort": "high"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "msg",
+     "text": "what if a quoted field spans two lines, like a multi-line street address? does ingest handle that?",
+     "model": "sonnet",
+     "effort": "medium"
+    },
+    {
+     "when": "answered_all",
+     "do": "end"
+    }
+   ],
+   "expectations": [
+    "The main agent attached with --main",
+    "Both questions are answered, with no tier-change event",
+    "A backlog item covers multi-line quoted fields",
+    "The reply names the backlog id",
+    "The final message reports the open item",
+    "No repository file was modified"
+   ],
+   "checks": [
+    {
+     "fn": "agent_main"
+    },
+    {
+     "fn": "answered_all_no_tier"
+    },
+    {
+     "fn": "item_matching",
+     "regex": "(?i)multi.?line|newline|span|two lines",
+     "anchor_prefix": ""
+    },
+    {
+     "fn": "agent_said",
+     "regex": "B1"
+    },
+    {
+     "fn": "final_mentions",
+     "all": [
+      "B1"
+     ]
+    },
+    {
+     "fn": "repo_unchanged"
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "name": "host-diagram-page-opens-as-tab",
+   "role": "host",
+   "prompt": "can you draw how ingest() reaches split_row as a small diagram page? a picture would help me",
+   "expected_output": "The live reviewer writes one self-contained HTML page into the session's pages/ folder showing ingest -> parse -> split_row, opens it as a desk tab with `page open` (by reviewer, open), names the file in its answer, and changes nothing in the repository.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "can you draw how ingest() reaches split_row as a small diagram page? a picture would help me",
+       "model": "sonnet",
+       "effort": "low"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "end"
+    }
+   ],
+   "expectations": [
+    "The user's request is answered",
+    "A page the reviewer opened is an open tab, and its file is in the session's pages/ folder",
+    "That page shows the call path (mentions ingest, parse and split_row)",
+    "The reviewer's answer names the page's .html file",
+    "No repository file was modified",
+    "No .lavish/ folder was created in the repository"
+   ],
+   "checks": [
+    {
+     "fn": "answered",
+     "seqs": [
+      1
+     ]
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "under_pages": true
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "under_pages": true,
+     "file_regex": "(?s)(?=.*ingest)(?=.*parse)(?=.*split_row)"
+    },
+    {
+     "fn": "agent_said",
+     "regex": "\\.html\\b"
+    },
+    {
+     "fn": "repo_unchanged"
+    },
+    {
+     "fn": "no_repo_path",
+     "path": ".lavish"
+    }
+   ]
+  },
+  {
+   "id": 10,
+   "name": "host-skill-html-page-via-run",
+   "role": "host",
+   "prompt": "/analyze-code split_row --html",
+   "expected_output": "The reviewer runs /analyze-code with --html; it writes the page (and its generator, if any) into pages/ instead of the repository's .lavish/, runs any generator through `review-desk-axi run`, opens the result as a desk tab, condenses the analysis in its answer, and leaves the repository untouched.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "/analyze-code split_row --html",
+       "skill": "analyze-code",
+       "args": "split_row --html",
+       "model": "sonnet",
+       "effort": "low"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "end"
+    }
+   ],
+   "expectations": [
+    "The skill entry is answered",
+    "A page the reviewer opened is an open tab, and its file is in the session's pages/ folder",
+    "The page is the split_row analysis (mentions split_row and csv.reader)",
+    "The page was built by the skill's generator (analyze-code figure markup)",
+    "The answer cites path:line refs from the analysis",
+    "No repository file was modified",
+    "No .lavish/ folder was created in the repository"
+   ],
+   "checks": [
+    {
+     "fn": "answered",
+     "seqs": [
+      1
+     ]
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "under_pages": true
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "under_pages": true,
+     "file_regex": "(?s)(?=.*split_row)(?=.*csv\\.reader)"
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "under_pages": true,
+     "file_regex": "class=\"t-code|class=\"fig"
+    },
+    {
+     "fn": "replies_cite_lines"
+    },
+    {
+     "fn": "repo_unchanged"
+    },
+    {
+     "fn": "no_repo_path",
+     "path": ".lavish"
+    }
+   ]
+  },
+  {
+   "id": 11,
+   "name": "host-close-and-open-existing-pages",
+   "role": "host",
+   "prompt": "close the summary page, and open the older summary at {RUN}/archive/csv-ingest-v1.html instead",
+   "expected_output": "The reviewer closes the open summary page (P1) and opens the existing older summary as a tab with `page open`, both recorded as done by the reviewer, without writing a new page or touching the repository.",
+   "files": [],
+   "setup": {
+    "fixture": "csv-ingest",
+    "session": {
+     "pages": [
+      {
+       "file": "summaries/quoted-commas.html",
+       "title": "Quoted commas survive",
+       "html": "<!doctype html><html><head><title>Quoted commas survive</title></head><body style='background:#050505;color:#fff'><h1>Quoted commas survive</h1><p>split_row uses csv.reader.</p></body></html>"
+      },
+      {
+       "file": "archive/csv-ingest-v1.html",
+       "html": "<!doctype html><html><head><title>CSV ingest v1</title></head><body style='background:#050505;color:#fff'><h1>CSV ingest v1</h1><p>The first ingest: split on commas.</p></body></html>",
+       "registered": false
+      }
+     ],
+     "chat": [
+      {
+       "kind": "msg",
+       "role": "user",
+       "text": "close the summary page, and open the older summary at {RUN}/archive/csv-ingest-v1.html instead",
+       "model": "sonnet",
+       "effort": "low"
+      }
+     ],
+     "backlog": [],
+     "agent": null
+    }
+   },
+   "driver": [
+    {
+     "when": "answered_all",
+     "do": "end"
+    }
+   ],
+   "expectations": [
+    "The user's request is answered",
+    "The reviewer closed the summary page P1",
+    "The older summary is an open tab the reviewer opened",
+    "The reviewer wrote no new page into pages/",
+    "No repository file was modified"
+   ],
+   "checks": [
+    {
+     "fn": "answered",
+     "seqs": [
+      1
+     ]
+    },
+    {
+     "fn": "page_closed",
+     "by": "reviewer",
+     "path_regex": "quoted-commas\\.html$"
+    },
+    {
+     "fn": "page_open",
+     "by": "reviewer",
+     "path_regex": "archive/csv-ingest-v1\\.html$"
+    },
+    {
+     "fn": "no_new_pages"
+    },
+    {
+     "fn": "repo_unchanged"
+    }
+   ]
+  }
+ ]
+}
