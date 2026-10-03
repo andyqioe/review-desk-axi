@@ -32,6 +32,8 @@ The page must define these CSS custom properties: --surface, --surface-2, --bord
 --text-2, --primary, --primary-tint, --accent, --ok, --ok-tint, --warn, --warn-tint, --test,
 --test-tint, --sans, --mono.
 """
+from __future__ import annotations  # `str | None` hints on Python 3.9
+
 import html
 import re
 
