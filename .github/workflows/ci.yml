@@ -21,10 +21,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install ripgrep and Pygments
+      - name: Install ripgrep, Pygments and pytest
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep; else brew install ripgrep; fi
-          python -m pip install --quiet pygments
+          python -m pip install --quiet pygments pytest
       - name: Git identity for the test repositories
         run: |
           git config --global user.email ci@example.com

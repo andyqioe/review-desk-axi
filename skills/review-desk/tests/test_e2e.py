@@ -183,6 +183,16 @@ class ProtocolTest(Desk):
         self.assertEqual(self.http("GET", f"/api/{self.sid}/state", token="wrong")[0], 403)
         self.assertEqual(self.http("POST", f"/api/{self.sid}/message", {"text": "x"}, origin="http://evil.test")[0], 403)
         self.assertEqual(self.http("GET", f"/api/{self.sid}/file?path=../../etc/passwd")[0], 404)
+        self.assertEqual(self.http("GET", f"/api/{self.sid}/file?path=/etc/passwd")[0], 404)
+        # a symlink the repository holds (a skill linked in from its checkout) opens like any other file
+        outside = Path(self.tmp.name) / "checkout"
+        outside.mkdir(exist_ok=True)
+        (outside / "linked.py").write_text("X = 1\n")
+        if not (self.repo / "vendored").exists():
+            (self.repo / "vendored").symlink_to(outside)
+        code, out = self.http("GET", f"/api/{self.sid}/file?path=vendored/linked.py")
+        self.assertEqual((code, out.get("lines")), (200, ["X = 1"]))
+        self.assertEqual(self.http("GET", f"/api/{self.sid}/file?path=vendored/../../checkout/linked.py")[0], 404)
         self.assertEqual(self.http("GET", f"/s/{self.sid}?t=wrong", token=None)[0], 403)
         with urllib.request.urlopen(self.url, timeout=5) as r:
             page = r.read().decode()

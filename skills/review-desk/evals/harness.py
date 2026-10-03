@@ -380,7 +380,7 @@ def check_one(c: dict, run: Path, s) -> tuple[bool, str]:
         return bool(m), m.group(0) if m else f"no match for {c['regex']} in {c['path']}"
     if fn == "fixture_tests_pass":
         out = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=repo, capture_output=True, text=True)
-        tail = (out.stdout.strip().splitlines() or [""])[-1]
+        tail = (out.stdout.strip().splitlines() or out.stderr.strip().splitlines() or [""])[-1]
         return out.returncode == 0, tail
     if fn == "reloaded_after_done":
         done_at = [ev.get("at", 0) for ev in s.backlog_events() if ev.get("op") == "status" and ev.get("status") == "done"]

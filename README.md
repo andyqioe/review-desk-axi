@@ -129,7 +129,10 @@ for s in review-desk implementation-summary analyze-code; do ln -s ~/review-desk
 
 - `bin` links `review-desk-axi` onto your `PATH` (default `/opt/homebrew/bin`; pass `--bin-dir ~/.local/bin` elsewhere).
 - `agents` writes the subagent fallback reviewers (`~/.claude/agents/review-desk-{low,medium,high}.md`).
-- `hooks` adds a SessionStart hook (a home view of this repository's sessions) and a UserPromptSubmit hook (backlog that never reached the main agent) to `~/.claude/settings.json`, plus a permission for `review-desk-axi`.
+- `hooks` adds four hooks to `~/.claude/settings.json`, plus a permission for `review-desk-axi`:
+  SessionStart prints a home view of this repository's sessions;
+  UserPromptSubmit injects backlog that never reached the main agent;
+  PostToolUse and Stop hand an Execute or End to the agent that opened the desk, after its next tool call or before it stops.
 
 Run `setup hooks`, `setup bin` or `setup agents` for one part.
 

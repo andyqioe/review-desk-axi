@@ -57,11 +57,14 @@ def excerpt(s: store.Session, path: str, rng: str | None, side: str = "new", lim
 
 
 def repo_file(s: store.Session, rel: str) -> Path | None:
-    root = Path(s.meta().get("repo", "/")).resolve()
-    p = (root / rel).resolve()
-    if root not in p.parents or not p.is_file():
+    """A file in the repository, by its repository-relative path. Containment is judged on the path as
+    written (no `..`, not absolute), so a symlink the repository itself holds opens the way git and editors
+    open it, while a crafted path still cannot climb out of the repository."""
+    rp = Path(rel)
+    if not rel or rp.is_absolute() or ".." in rp.parts:
         return None
-    return p
+    p = Path(s.meta().get("repo", "/")) / rp
+    return p if p.is_file() else None
 
 
 def repo_lines(s: store.Session, rel: str) -> list[str] | None:

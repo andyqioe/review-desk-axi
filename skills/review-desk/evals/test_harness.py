@@ -67,7 +67,8 @@ def golden(r: Run) -> None:
         r.final(f"Spawned review-desk-medium on model sonnet.\n\n↗ {url}\n")
     elif r.id == 2:
         r.rd("backlog", r.sid, "ack", "B1", "B2")
-        subprocess.run(["sed", "-i", "", "s/csv.reader(\\[line\\]))/csv.reader([line], skipinitialspace=True))/", "src/parse.py"], cwd=r.repo, check=True)
+        parse = r.repo / "src" / "parse.py"  # a plain edit: BSD and GNU sed disagree on -i
+        parse.write_text(parse.read_text().replace("csv.reader([line]))", "csv.reader([line], skipinitialspace=True))"))
         with open(r.repo / "tests" / "test_parse.py", "a") as fh:
             fh.write("\n\nimport pytest\nfrom src.parse import parse\n\n\ndef test_short_row():\n    with pytest.raises(ValueError):\n        parse(['a'])\n")
         r.rd("backlog", r.sid, "done", "B1", "--note", "added test_short_row at tests/test_parse.py:12")

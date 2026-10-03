@@ -410,17 +410,20 @@ def cmd_run(a) -> int:
     pages, tmp = s.pages_dir, s.scratch_dir
     pages.mkdir(parents=True, exist_ok=True)
     tmp.mkdir(parents=True, exist_ok=True)
-    wrapped = sandbox_argv([pages, tmp], argv)
+    # a reviewer started before pages moved to <home>/pages/<sid> still writes into the session's own pages/
+    legacy = (s.dir / "pages").resolve()
+    wrapped = sandbox_argv([pages, tmp] + ([legacy] if legacy.is_dir() and legacy != pages else []), argv)
     if wrapped is None:
         raise DeskError("no write sandbox on this machine (sandbox-exec or bwrap)",
                         [f"Write the page directly into {tilde(pages)} with the Write tool"])
-    before = {p: p.stat().st_mtime_ns for p in pages.rglob("*.htm*")}
+    roots = [pages] + ([legacy] if legacy.is_dir() and legacy != pages else [])
+    before = {q: q.stat().st_mtime_ns for r in roots for q in r.rglob("*.htm*")}
     env = {**os.environ, "TMPDIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1"}
     p = subprocess.run(wrapped, cwd=pages, env=env, capture_output=True, text=True, timeout=a.timeout)
     out = (p.stdout + p.stderr).strip()
     kv("exit", p.returncode)
     kv("output", clip(out, 4000) if out else "(none)")
-    pages_now = [q for q in pages.rglob("*.htm*") if before.get(q) != q.stat().st_mtime_ns]
+    pages_now = [q for r in roots for q in r.rglob("*.htm*") if before.get(q) != q.stat().st_mtime_ns]
     table("written", [{"path": tilde(q)} for q in sorted(pages_now)], ["path"])
     help_block([run(f"page {s.sid} open {tilde(q)} --title \"<what it shows>\"") for q in sorted(pages_now)[:3]]
                or [f"Only writes inside {tilde(pages)} succeed; write the page there"])
