@@ -20,7 +20,7 @@
   /></a>
 </p>
 
-<p align="center"><b>Review your agent's change in a real editor, with an AI reviewer that answers every question and never edits code.</b></p>
+<p align="center"><b>Have you ever left your agent to run the whole night and have no idea what it finished implementing? Review-desk has you covered.</b></p>
 
 <p align="center"><img alt="Review Desk in action: select lines, ask, watch the answer stream in, search, open pages, execute the backlog" src="docs/review-desk.webp" width="100%"></p>
 
