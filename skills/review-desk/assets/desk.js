@@ -890,8 +890,10 @@ function renderBacklog() {
       `<div class="line1"><span class="iid">${esc(i.id)}</span><span class="status" data-s="${esc(i.status)}">${esc(i.status)}</span><span>${esc(i.kind || "fix")}</span><span>by ${esc(i.by || "?")}</span></div>` +
       `<div class="body"><div class="title">${esc(i.title)}</div>` +
       `${i.anchor ? `<div><span class="chip-loc" data-ref="${esc(i.anchor)}">${esc(i.anchor)}</span></div>` : ""}` +
-      `${i.detail && i.detail !== i.title ? `<div class="detail">${esc(i.detail)}</div>` : ""}${patch}` +
-      `${i.note ? `<div class="detail">main: ${esc(i.note)}</div>` : ""}<div class="acts">${acts}</div></div></li>`;
+      // Details and notes are Markdown, like chat answers: the reviewer writes Context / Issue / Suggested fix /
+      // Reasoning / Tests as bullets, and backticked path:line refs become links that open in the editor.
+      `${i.detail && i.detail !== i.title ? `<div class="detail">${md(i.detail)}</div>` : ""}${patch}` +
+      `${i.note ? `<div class="detail note">${md(`main: ${i.note}`)}</div>` : ""}<div class="acts">${acts}</div></div></li>`;
   }).join("") : '<li class="empty">Nothing yet. Flags, suggested edits and issues the reviewer finds land here, and reach the main agent on Execute or when the reviewer exits.</li>';
   syncExecSel();
   $("#exec-all").disabled = !items.some(openish);

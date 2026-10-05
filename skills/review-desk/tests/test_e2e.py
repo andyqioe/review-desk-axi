@@ -491,6 +491,51 @@ class DeliveryTest(Desk):
             self.assertEqual(self.rd_full("hook", event, input="not json")[0], 0)
 
 
+class StructuredDetailTest(Desk):
+    """A backlog detail is multi-line Markdown (Context, Issue, Suggested fix, Reasoning, Tests): it goes in on
+    stdin untouched by the shell, and reaches the main agent whole, in handoff and in the Execute delivery."""
+
+    DETAIL = "\n".join([
+        "- **Context:** `split_row` (`src/parse.py:12`) now uses `csv.reader`.",
+        "- **Issue:** an unterminated quote raises `csv.Error` and aborts the whole ingest.",
+        "- **Suggested fix:** catch `csv.Error` in `parse` (`src/parse.py:24`) and collect the raw line.",
+        "  - return the rejects beside the rows",
+        "- **Reasoning:** one bad row should not lose the file; " + "returning rejects keeps them visible. " * 8,
+        "- **Tests:** add `test_unterminated_quote_is_rejected` to `tests/test_parse.py`.",
+    ])
+
+    def hook(self, event, session="agent-1", **data):
+        out = self.rd("hook", event, input=json.dumps({"session_id": session, "cwd": str(self.repo), **data}))
+        return json.loads(out) if out.strip() else None
+
+    def test_detail_from_stdin_reaches_the_main_agent_whole(self):
+        self.hook("tool", tool_name="Bash", tool_input={"command": f"review-desk-axi add {self.sid} a.py:1"}, tool_response={"stdout": ""})
+        out = self.rd("backlog", self.sid, "add", "--title", "Quarantine bad rows", "--anchor", "src/parse.py:12-18",
+                      "--from", "1", "--detail-file", "-", input=self.DETAIL + "\n")
+        self.assertIn("created: B1", out)
+        self.assertGreater(len(self.DETAIL), 400, "longer than the old delivery cut")
+        import store
+        self.assertEqual(store.open_session(self.sid).backlog()[0]["detail"], self.DETAIL, "stored verbatim, backticks intact")
+        # --detail and --detail-file together is a usage error, and changes nothing
+        code, stdout, _ = self.rd_full("backlog", self.sid, "add", "--title", "x", "--detail", "a", "--detail-file", "-", input="b", check=False)
+        self.assertEqual(code, 2)
+        self.assertIn("not both", stdout)
+        self.assertEqual(len(store.open_session(self.sid).backlog()), 1)
+        # handoff prints each detail as an indented block, not one escaped table cell
+        handoff = self.rd("handoff", self.sid)
+        self.assertIn(f"detail_B1[{len(self.DETAIL.splitlines())} lines]:", handoff)
+        self.assertIn("\n    - return the rejects beside the rows\n", handoff)
+        self.assertNotIn("\\n", handoff)
+        # Execute delivers the whole detail, nested under its item
+        self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B1"]})
+        ctx = self.hook("tool", tool_name="Read", tool_input={"file_path": "/x"})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("- B1 [fix] Quarantine bad rows @ src/parse.py:12-18", ctx)
+        self.assertIn("    - **Tests:** add `test_unterminated_quote_is_rejected` to `tests/test_parse.py`.", ctx)
+        # update replaces the detail the same way
+        self.rd("backlog", self.sid, "update", "B1", "--detail-file", "-", input="- **Context:** new\n")
+        self.assertEqual(store.open_session(self.sid).backlog()[0]["detail"], "- **Context:** new")
+
+
 class FirstWatchTest(Desk):
     """A watch started after the user pressed Execute still delivers it: watch and the hooks read the same
     pending events, so an Execute is never stranded because no watch was running at the time."""

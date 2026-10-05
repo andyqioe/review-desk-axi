@@ -470,7 +470,21 @@ body.tab-dragging { user-select: none; }
 .item .status[data-s="done"] { color: var(--pass); background: rgba(52, 211, 153, 0.1); }
 .item .title { font-size: 13.5px; font-weight: 500; color: var(--text); line-height: 1.4; }
 .item .body { grid-column: 2; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--text-2); }
-.item .body .detail { white-space: pre-wrap; }
+.item .body .detail { line-height: 1.55; overflow-wrap: anywhere; }
+.item .detail p { margin: 0 0 6px; }
+.item .detail > :last-child, .item .detail li > :last-child { margin-bottom: 0; }
+.item .detail ul, .item .detail ol { margin: 2px 0 6px; padding-left: 18px; }
+.item .detail ul { list-style: disc; }
+.item .detail ul ul { list-style: circle; }
+.item .detail li { margin: 3px 0; }
+.item .detail li li { color: var(--text-3); }
+.item .detail strong { font-weight: 600; color: var(--text); }
+.item .detail code { font-size: 0.88em; background: var(--surface-3); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+.item .detail pre { margin: 6px 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; font-size: 11.5px; line-height: 1.5; }
+.item .detail pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.item .detail a.loc { color: #c7d2fe; text-decoration: none; border-bottom: 1px dotted var(--primary-line); cursor: pointer; font-family: var(--mono); font-size: 0.9em; }
+.item .detail a.loc:hover { color: #fff; }
+.item .detail.note { color: var(--text-3); }
 .item .acts { display: flex; gap: 6px; }
 .item .acts button { border: 0; background: none; padding: 0; color: var(--text-3); font: 500 11.5px/1.4 var(--mono); }
 .item .acts button:hover { color: var(--text); }

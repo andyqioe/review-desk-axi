@@ -93,7 +93,12 @@ def golden(r: Run) -> None:
     elif r.id == 5:
         r.drive()
         r.rd("attach", r.sid, "--model", "haiku", "--effort", "low")
-        r.rd("backlog", r.sid, "add", "--title", "Add a test for the short-row ValueError", "--anchor", "tests/test_parse.py:1-5", "--from", "1")
+        r.rd("backlog", r.sid, "add", "--title", "Add a test for the short-row ValueError", "--anchor", "tests/test_parse.py:1-5", "--from", "1",
+             "--detail-file", "-", stdin="- **Context:** `parse` raises ValueError for short rows (src/parse.py:16).\n"
+             "- **Issue:** no test covers it, so a regression would pass CI.\n"
+             "- **Suggested fix:** add `test_short_row_raises` beside tests/test_parse.py:1.\n"
+             "- **Reasoning:** the error is new behavior and the only guard against silent truncation.\n"
+             "- **Tests:** the new test feeds `['a']` and expects ValueError.\n")
         r.rd("reply", r.sid, "--to", "1,2", "--text", "#1: no, logged B1 (`src/parse.py:17` is untested). #2: no, `src/parse.py:13` skips it.")
         r.rd("wait", r.sid, "--timeout", "30")
         r.rd("handoff", r.sid)
@@ -111,7 +116,12 @@ def golden(r: Run) -> None:
     elif r.id == 7:
         r.drive()
         r.rd("attach", r.sid, "--model", "haiku", "--effort", "low")
-        r.rd("backlog", r.sid, "add", "--title", "Pass skipinitialspace=True to csv.reader", "--anchor", "src/parse.py:7", "--from", "1", "--kind", "fix")
+        r.rd("backlog", r.sid, "add", "--title", "Pass skipinitialspace=True to csv.reader", "--anchor", "src/parse.py:7", "--from", "1", "--kind", "fix",
+             "--detail-file", "-", stdin="- **Context:** `split_row` builds a `csv.reader` at src/parse.py:7.\n"
+             "- **Issue:** fields after `, ` keep their leading space.\n"
+             "- **Suggested fix:** pass `skipinitialspace=True` at src/parse.py:7.\n"
+             "- **Reasoning:** the user asked for it, and the reader then trims at the source.\n"
+             "- **Tests:** add a case with `a, b` expecting `['a', 'b']`.\n")
         r.rd("reply", r.sid, "--to", "1", "--text", "I don't edit code. Logged B1 for `src/parse.py:7`.")
         r.rd("wait", r.sid, "--timeout", "30")
         r.rd("handoff", r.sid)

@@ -19,7 +19,8 @@ Reviewer agent
   attach <sid> --model M --effort E [--main]       briefing: context, chat, backlog, pending messages
   wait <sid> [--timeout 540]                       block for the next user events
   reply <sid> --to 4,5 --file - [--then-wait]      answer in the chat (Markdown on stdin)
-  backlog <sid> add --title T --detail D --anchor path:a-b --from SEQ [--kind fix|question]
+  backlog <sid> add --title T --anchor path:a-b --from SEQ --detail-file - [--kind fix|question]
+                                                   log an issue (Context/Issue/Suggested fix/Reasoning/Tests on stdin)
   backlog <sid> list [--fields a,b] [--full] [--all] | update <id> ...
   chat <sid> [seq...] [--last N] [--full]          read messages in full
   detach <sid> --reason handoff|execute|idle|end
@@ -47,7 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import axi  # noqa: E402
 import store  # noqa: E402
-from axi import BIN, DeskError, clip, help_block, kv, run, table  # noqa: E402
+from axi import BIN, DeskError, block, clip, help_block, kv, run, table  # noqa: E402
 
 SKILL = Path(__file__).resolve().parent.parent
 PORT = int(os.environ.get("REVIEW_DESK_PORT", "4388"))
@@ -455,7 +456,7 @@ def cmd_attach(a) -> int:
     table("pending", [event_row(e, s.sid) for e in pending], EVENT_FIELDS, "none")
     if pending:
         help_block(skill_hints(s, pending) + [run(f"reply {s.sid} --to <seq,...> --file - --then-wait") + " with the Markdown answer on stdin",
-                    run(f'backlog {s.sid} add --title "<title>" --detail "<what, where, fix>" --anchor <path:a-b> --from <seq>') + " first, for a confirmed issue"])
+                    run(f'backlog {s.sid} add --title "<title>" --anchor <path:a-b> --from <seq> --detail-file -') + " first, for a confirmed issue, with the Context / Issue / Suggested fix / Reasoning / Tests bullets on stdin"])
     else:
         help_block([run(f"wait {s.sid}") + " (Bash timeout 600000)"])
     return 0
@@ -514,7 +515,7 @@ def cmd_wait(a) -> int:
                 hints = exit_help(s, "end", "END")
             else:
                 hints = skill_hints(s, events) + [run(f"reply {s.sid} --to <seq,...> --file - --then-wait") + " with the Markdown answer on stdin",
-                         run(f'backlog {s.sid} add --title "<title>" --detail "<detail>" --anchor <path:a-b> --from <seq>') + " first, for a confirmed issue"]
+                         run(f'backlog {s.sid} add --title "<title>" --anchor <path:a-b> --from <seq> --detail-file -') + " first, for a confirmed issue, with the Context / Issue / Suggested fix / Reasoning / Tests bullets on stdin"]
             help_block(hints)
             return 0
         if time.time() >= deadline:
@@ -571,11 +572,25 @@ def cmd_chat(a) -> int:
     return 0
 
 
+def read_detail(a) -> str | None:
+    """--detail inline, or --detail-file (- for stdin): a structured detail is multi-line Markdown full of
+    backticks, which a double-quoted shell argument would run as command substitutions."""
+    if a.detail is not None and a.detail_file:
+        raise DeskError("pass --detail or --detail-file, not both", [run(f"backlog {a.sid} {a.action} ... --detail-file -") + " with the Markdown on stdin"], 2)
+    if a.detail_file == "-":
+        return sys.stdin.read().strip("\n")
+    if a.detail_file:
+        return Path(a.detail_file).read_text(encoding="utf-8").strip("\n")
+    return a.detail
+
+
 def cmd_backlog(a) -> int:
     s = session(a.sid)
+    if a.action in ("add", "update"):
+        a.detail = read_detail(a)
     if a.action == "add":
         if not a.title:
-            raise DeskError("backlog add needs --title", [run(f'backlog {a.sid} add --title "<title>" --detail "<detail>" --anchor <path:a-b> --from <seq>')], 2)
+            raise DeskError("backlog add needs --title", [run(f'backlog {a.sid} add --title "<title>" --anchor <path:a-b> --from <seq> --detail-file -') + " with the detail on stdin"], 2)
         patch = Path(a.patch).read_text(encoding="utf-8") if a.patch else None
         i = s.backlog_add(a.title, a.detail or "", a.kind, a.anchor, a.from_seq, patch, by=a.by, dedupe=True)
         kv("existing" if i.get("existing") else "created", i["id"])
@@ -594,7 +609,7 @@ def cmd_backlog(a) -> int:
             help_block([run(f"backlog {a.sid} list --fields {','.join(BACKLOG_FIELDS)} --full") + " for every field in full"])
     elif a.action == "update":
         if not a.ids:
-            raise DeskError("backlog update needs an id", [run(f'backlog {a.sid} update <id> --detail "<detail>"')], 2)
+            raise DeskError("backlog update needs an id", [run(f'backlog {a.sid} update <id> --detail-file -') + " with the detail on stdin"], 2)
         i = s.backlog_update(a.ids[0].upper(), title=a.title, detail=a.detail, anchor=a.anchor)
         kv("updated", i["id"])
     else:
@@ -617,7 +632,12 @@ def cmd_handoff(a) -> int:
     kv("count", len(items))
     kv("execute_requested", " ".join(execute) or "none")
     rows = [item_row(i, True, s.sid) | {"patch": clip(i.get("patch"), 1200, f"{BIN} backlog {s.sid} list --fields id,patch --full")} for i in items]
-    table("items", rows, ["id", "status", "kind", "anchor", "from", "by", "title", "detail", "patch"], "none awaiting the main agent")
+    table("items", rows, ["id", "status", "kind", "anchor", "from", "by", "title", "patch"], "none awaiting the main agent")
+    # Details are structured Markdown (Context, Issue, Suggested fix, Reasoning, Tests); a table cell would flatten
+    # them into one escaped line, so each prints whole as an indented block the main agent can read and follow.
+    for i in items:
+        if i.get("detail") and i["detail"] != i["title"]:
+            block(f"detail_{i['id']}", i["detail"])
     if items:
         help_block([run(f"backlog {s.sid} ack {' '.join(i['id'] for i in items)}") + " once tracked in your task list",
                     run(f'backlog {s.sid} done <id> --note "<what changed, path:line>"') + " after implementing"])
@@ -868,8 +888,10 @@ def delivery_text(s: store.Session, events: list[dict], via: str, to: str | None
              f"for each, rebuild the summary (implementation-summary, Backlog follow-up form) and `{BIN} reload {s.sid}`."]
     for i in (items[x] for x in ids if x in items):
         anchor = f" @ {i['anchor']}" if i.get("anchor") else ""
-        detail = clip(i.get("detail") or "", 400, "") if i.get("detail") and i.get("detail") != i.get("title") else ""
-        lines.append(f"- {i['id']} [{i.get('kind') or 'fix'}] {i['title']}{anchor}" + (f": {detail}" if detail else ""))
+        lines.append(f"- {i['id']} [{i.get('kind') or 'fix'}] {i['title']}{anchor}")
+        # The whole detail, indented under its item: the Suggested fix and Tests sections are the instructions.
+        if i.get("detail") and i.get("detail") != i.get("title"):
+            lines.extend("    " + l if l.strip() else "" for l in i["detail"].splitlines())
     lines.append(f"Every field, including patches: `{BIN} handoff {s.sid}`.")
     s.mark_delivered(max(e["seq"] for e in events), via, to)
     return "\n".join(lines)
@@ -1087,6 +1109,7 @@ def build_parser() -> Parser:
     p.add_argument("ids", nargs="*")
     p.add_argument("--title")
     p.add_argument("--detail")
+    p.add_argument("--detail-file", help="Markdown detail from a file, or - for stdin (use for multi-line details)")
     p.add_argument("--kind", default="fix", choices=["fix", "suggested-edit", "question"])
     p.add_argument("--anchor")
     p.add_argument("--from", dest="from_seq", type=int)

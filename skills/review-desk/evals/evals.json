@@ -433,7 +433,8 @@
     "The replies cite at least one path:line",
     "No repository file was modified",
     "The final message starts with END sid=",
-    "The reviewer detached with reason end"
+    "The reviewer detached with reason end",
+    "Every reviewer backlog detail has Context, Issue, Suggested fix, Reasoning and Tests bullets in order, citing path:line"
    ],
    "checks": [
     {
@@ -465,6 +466,9 @@
     {
      "fn": "agent_reason",
      "reason": "end"
+    },
+    {
+     "fn": "details_structured"
     }
    ]
   },
@@ -586,7 +590,8 @@
     "The reply names the backlog id it logged",
     "The final message starts with EXECUTE",
     "Every backlog item is handed-off",
-    "The reviewer detached with reason execute"
+    "The reviewer detached with reason execute",
+    "Every reviewer backlog detail has Context, Issue, Suggested fix, Reasoning and Tests bullets in order, citing path:line"
    ],
    "checks": [
     {
@@ -612,6 +617,9 @@
     {
      "fn": "agent_reason",
      "reason": "execute"
+    },
+    {
+     "fn": "details_structured"
     }
    ]
   },
