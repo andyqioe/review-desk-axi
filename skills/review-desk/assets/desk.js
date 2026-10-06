@@ -879,7 +879,8 @@ function renderBacklog() {
   const sig = JSON.stringify(items.map((i) => [i.id, i.status, i.title, i.detail, i.note])) + [...S.picked].join();
   if (sig === S.backlogSig) return;
   S.backlogSig = sig;
-  const openish = (i) => ["open", "handed-off"].includes(i.status);
+  // acked = accepted by the main agent but not finished: still selectable, so the user can execute it again or dismiss it
+  const openish = (i) => ["open", "handed-off", "acked"].includes(i.status);
   S.picked.forEach((id) => { if (!items.some((i) => i.id === id && openish(i))) S.picked.delete(id); });
   $("#items").innerHTML = items.length ? items.map((i) => {
     const patch = i.patch ? `<pre class="patch">${i.patch.replace(/\n$/, "").split("\n").map((l) => `<span class="${l.startsWith("+") && !l.startsWith("+++") ? "a" : l.startsWith("-") && !l.startsWith("---") ? "d" : l.startsWith("@@") ? "h" : ""}">${esc(l)}</span>`).join("\n")}</pre>` : "";
@@ -896,7 +897,7 @@ function renderBacklog() {
       `${i.note ? `<div class="detail note">${md(`main: ${i.note}`)}</div>` : ""}<div class="acts">${acts}</div></div></li>`;
   }).join("") : '<li class="empty">Nothing yet. Flags, suggested edits and issues the reviewer finds land here, and reach the main agent on Execute or when the reviewer exits.</li>';
   syncExecSel();
-  $("#exec-all").disabled = !items.some(openish);
+  $("#exec-all").disabled = !items.some((i) => ["open", "handed-off"].includes(i.status));  // the server skips acked work here
 }
 
 // "Execute selected" stays clickable while nothing is ticked: a disabled button swallows the click without a
@@ -946,7 +947,16 @@ async function refresh() {
     renderTree();
     $("#title").textContent = st.session.title || "Review";
     const m = S.manifest;
-    $("#meta").textContent = [st.session.repo && st.session.repo.split("/").pop(), m.base_label && `vs ${m.base_label}`].filter(Boolean).join(" · ");
+    const pr = st.session.pr, meta = $("#meta");
+    meta.textContent = [pr ? "" : st.session.repo && st.session.repo.split("/").pop(), m.base_label && `vs ${m.base_label}`].filter(Boolean).join(" · ");
+    if (pr) {
+      // a PR desk names the pull request, not its worktree folder, and links to it on GitHub
+      const a = document.createElement("a");
+      a.href = pr.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = `${pr.owner}/${pr.repo}#${pr.number}`;
+      a.title = `Open the pull request on GitHub (@${pr.author}, ${pr.base_ref} ← ${pr.head_ref})`;
+      meta.prepend(a, meta.textContent ? " · " : "");
+    }
     const story = $("#story");
     if (first) story.src = `/s/${D.sid}/story?t=${encodeURIComponent(D.token)}`;
     else if (again) { story.contentWindow.location.reload(); if (S.active !== "story") renderCode(); toast("Summary and diffs reloaded"); }
@@ -1016,6 +1026,9 @@ function syncPages(first) {
     }
     S.pageSeen.set(pg.id, { focus: pg.focus, mtime: pg.mtime });
   });
+  // a desk without a summary (a pull request) has an empty Story: start on its first page instead
+  const firstOpen = pages.find((pg) => pg.open);
+  if (first && !S.state.session.page && S.active === "story" && firstOpen) jump = `page:${firstOpen.id}`;
   const sig = JSON.stringify(pages.map((pg) => [pg.id, pg.open, pageName(pg), pg.mtime]));
   if (sig !== S.pageSig) { S.pageSig = sig; renderPages(); }
   if (jump) {

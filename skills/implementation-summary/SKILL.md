@@ -52,8 +52,8 @@ Steps 4 and 5 tell the same story; write the terminal version first because it f
 
 ## When the reviewer hands back
 
-Follow "When the reviewer hands back" in the review-desk skill: track and `ack` every item, then branch on the keyword.
-For `EXECUTE`, implement the items, then run this skill again in its **Backlog follow-up** form (Scaling table) and rebuild into the same session: `build_page.py ... --review-data <existing .review folder>`, then `RD reload <sid> --page <new .html>`, and start `RD watch <sid>` again in the background (the reviewer keeps running).
+Follow "When the reviewer hands back" in the review-desk skill: `ack` only the items the user executed (leave the rest open), then branch on the keyword.
+For `EXECUTE`, implement the items and close each with `RD backlog <sid> done <id> --note "<what changed, path:line>"` (or `reopen <id> --note "<what remains>"` when only partly done), then run this skill again in its **Backlog follow-up** form (Scaling table) and rebuild into the same session: `build_page.py ... --review-data <existing .review folder>`, then `RD reload <sid> --page <new .html>`, and start `RD watch <sid>` again in the background (the reviewer keeps running).
 
 ## Find the story
 
@@ -172,7 +172,7 @@ If you notice three bullets in a row that each start with a past-tense verb, tha
 | Several features | title card, constellation, a short story per feature (scene only where it helps) | hero, constellation, a story per feature |
 | Large change (dozens of files or more) | as above, plus the rollup decides the stories: one per area that changed behavior, one "Also changed" sentence for the rest | stories plus "Every change"; check the build's coverage line |
 | Tiny change (a rename, a one-line fix, a config tweak) | one-line scene, 1-3 sentences with links, one proof line; skip the inventory when the links already name every file | skip the page |
-| Backlog follow-up (executing items from a Review Desk) | one line per item: `Bn` - what changed, with links; proof for what you ran; no title card or scene unless an item changed behavior | rebuild into the same `.review` folder and `RD reload`; skip AskUserQuestion; restart `watch` (the reviewer keeps running) |
+| Backlog follow-up (executing items from a Review Desk) | one line per item: `Bn` - what changed, with links; proof for what you ran; no title card or scene unless an item changed behavior | `RD backlog <sid> done <id>` per finished item first, then rebuild into the same `.review` folder and `RD reload`; skip AskUserQuestion; restart `watch` (the reviewer keeps running) |
 
 Every size except tiny includes the "Every change" block in the terminal; the page always renders it.
 Every size except tiny opens the Review Desk; a tiny change skips it unless the user asks to review.

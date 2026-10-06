@@ -491,6 +491,57 @@ class DeliveryTest(Desk):
             self.assertEqual(self.rd_full("hook", event, input="not json")[0], 0)
 
 
+class AckLifecycleTest(Desk):
+    """Ack means "accepted, implementing now". Items the user did not execute stay executable; accepted work the
+    agent never closes is listed until it is (Stop once per acceptance, the prompt hook, status, the home view)."""
+
+    def hook(self, event, session="agent-1", **data):
+        out = self.rd("hook", event, input=json.dumps({"session_id": session, "cwd": str(self.repo), **data}))
+        return json.loads(out) if out.strip() and out.lstrip().startswith("{") else (out or None)
+
+    def status_of(self, iid):
+        import store
+        return next(i["status"] for i in store.open_session(self.sid).backlog() if i["id"] == iid)
+
+    def test_only_executed_items_are_acked_and_unfinished_work_is_listed(self):
+        self.hook("tool", tool_name="Bash", tool_input={"command": f"review-desk-axi add {self.sid} a.py:1"}, tool_response={"stdout": ""})
+        for t in ("fix one", "fix two", "fix three"):
+            self.rd("backlog", self.sid, "add", "--title", t, "--anchor", "a.py:1", "--from", "1")
+        # the user executes B1 only: the help acks B1 and leaves B2 and B3 for the user
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B1"]})[0], 200)
+        handoff = self.rd("handoff", self.sid)
+        self.assertIn(f"backlog {self.sid} ack B1` to accept", handoff)
+        self.assertIn("Leave B2 B3 open", handoff)
+        self.rd("backlog", self.sid, "ack", "B1")
+        self.rd("backlog", self.sid, "done", "B1", "--note", "fixed at a.py:1")
+        # later the user executes B2: it is delivered, with the ack step
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B2"]})[0], 200)
+        ctx = self.hook("tool", tool_name="Read", tool_input={"file_path": "/x"})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(f"backlog {self.sid} ack B2", ctx)
+        # accepted and never closed: Stop reminds once per acceptance, then lets the agent stop
+        self.rd("backlog", self.sid, "ack", "B2")
+        stop = self.hook("stop")
+        self.assertEqual(stop["decision"], "block")
+        self.assertIn("B2 (fix two) but never closed it", stop["reason"])
+        self.assertIsNone(self.hook("stop"), "once per acceptance")
+        self.assertIsNone(self.hook("stop", stop_hook_active=True))
+        # a fresh session (after a context reset) and status both list it
+        self.assertIn("unfinished[1]", self.hook("prompt", session="agent-2"))
+        self.assertIsNone(self.hook("prompt", session="agent-2"), "once per session")
+        self.assertIn("B2 accepted, not done", self.rd("status", self.sid))
+        # partly done goes back to the user, and leaves the unfinished list
+        self.rd("backlog", self.sid, "reopen", "B2", "--note", "the test is still missing")
+        self.assertEqual(self.status_of("B2"), "open")
+        self.assertNotIn("accepted, not done", self.rd("status", self.sid))
+        # an item acked without an Execute (the old help) can still be executed from the desk
+        self.rd("backlog", self.sid, "ack", "B3")
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": []})[1]["ids"], ["B2"], "Execute all leaves acked work alone")
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B3"]})[0], 200)
+        self.assertEqual(self.status_of("B3"), "handed-off")
+        import store
+        self.assertIn("B3", store.open_session(self.sid).execute_requested())
+
+
 class StructuredDetailTest(Desk):
     """A backlog detail is multi-line Markdown (Context, Issue, Suggested fix, Reasoning, Tests): it goes in on
     stdin untouched by the shell, and reaches the main agent whole, in handoff and in the Execute delivery."""
@@ -667,6 +718,224 @@ class DraftStatusTest(Desk):
         self.assertEqual(stream.stat().st_mtime_ns, before, "streamed tool input changes nothing shown, so nothing is written")
         h.on_stream({"type": "content_block_stop"})  # well inside the 80 ms text throttle
         self.assertEqual(json.loads(stream.read_text())["status"], "Bash git diff --stat")
+
+
+def git_in(repo: Path, *args: str, env: dict | None = None) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+
+class PullRequestTest(Desk):
+    """`open --pr <link>`: a GitHub pull request as a session. "GitHub" is a local bare repository with
+    refs/pull/N/head (url.insteadOf sends https://github.com/ there) and a fake gh (tests/fake_gh.py)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        cls.port = free_port()
+        cls.fake = root / "gh"
+        cls.fake.mkdir()
+        bindir = root / "bin"
+        bindir.mkdir()
+        (bindir / "gh").write_text(f"#!/bin/sh\nexec {sys.executable} {SKILL / 'tests' / 'fake_gh.py'} \"$@\"\n")
+        (bindir / "gh").chmod(0o755)
+        gitconfig = root / "gitconfig"
+        gitconfig.write_text(f'[url "{root / "remote"}/"]\n\tinsteadOf = https://github.com/\n'
+                             '[user]\n\temail = t@t\n\tname = t\n[init]\n\tdefaultBranch = main\n'
+                             '[protocol "file"]\n\tallow = always\n[uploadpack]\n\tallowAnySHA1InWant = true\n')
+        cls.env = {**os.environ, "REVIEW_DESK_HOME": str(root / "home"), "REVIEW_DESK_PORT": str(cls.port),
+                   "REVIEW_DESK_NO_OPEN": "1", "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_GH_DIR": str(cls.fake),
+                   "GIT_CONFIG_GLOBAL": str(gitconfig), "GIT_CONFIG_NOSYSTEM": "1"}
+        os.environ["REVIEW_DESK_HOME"] = cls.env["REVIEW_DESK_HOME"]
+        g = lambda repo, *a: git_in(repo, *a, env=cls.env)  # noqa: E731
+        # upstream: main, a PR branch off it, then main moves on (the PR must not show that commit)
+        seed = root / "seed"
+        (seed / "src").mkdir(parents=True)
+        g(root, "init", "-q", str(seed))
+        (seed / "src" / "app.py").write_text("".join(f"line {i}\n" for i in range(1, 41)))
+        (seed / "README.md").write_text("widgets\n")
+        g(seed, "add", "-A"); g(seed, "commit", "-qm", "init")
+        g(seed, "switch", "-qc", "feature")
+        (seed / "src" / "app.py").write_text("".join(f"line {i}\n" if i != 20 else "line 20 changed by the PR\n" for i in range(1, 41)))
+        (seed / "src" / "new.py").write_text("NEW = 1\n")
+        g(seed, "add", "-A"); g(seed, "commit", "-qm", "the PR")
+        cls.head = g(seed, "rev-parse", "HEAD")
+        g(seed, "switch", "-q", "main")
+        (seed / "README.md").write_text("widgets, moved on\n")
+        g(seed, "commit", "-qam", "main moves on")
+        cls.base_tip = g(seed, "rev-parse", "HEAD")
+        cls.bare = root / "remote" / "acme" / "widgets.git"
+        cls.bare.parent.mkdir(parents=True)
+        g(root, "clone", "-q", "--bare", str(seed), str(cls.bare))
+        g(cls.bare, "update-ref", "refs/pull/7/head", cls.head)
+        cls.seed = seed
+        # the user's own clone, on another branch with uncommitted work: a PR review must never touch it
+        cls.repo = root / "work"
+        g(root, "clone", "-q", "https://github.com/acme/widgets.git", str(cls.repo))
+        g(cls.repo, "switch", "-qc", "my-branch")
+        (cls.repo / "README.md").write_text("my uncommitted edit\n")
+        cls.write_pr(7, state="OPEN", base=cls.base_tip, head=cls.head)
+        (cls.fake / "comments-7.json").write_text(json.dumps([
+            {"path": "src/app.py", "line": 20, "body": "Why change line 20?", "user": {"login": "carol"}, "created_at": "2026-10-02T00:00:00Z"}]))
+        out = cls.rd("open", "--pr", "https://github.com/acme/widgets/pull/7/files", cwd=str(cls.repo))
+        cls.open_out = out
+        cls.sid = out.split("sid: ")[1].split()[0].strip('"')
+        cls.url = out.split("url: ")[1].split()[0].strip('"')
+        cls.token = cls.url.split("t=")[1]
+
+    @classmethod
+    def write_pr(cls, n, state, base, head):
+        (cls.fake / f"pr-{n}.json").write_text(json.dumps({
+            "number": n, "title": "Change line 20", "body": "Changes line 20.\n\n<script>alert(1)</script>", "url": f"https://github.com/acme/widgets/pull/{n}",
+            "state": state, "isDraft": False, "author": {"login": "bob"}, "baseRefName": "main", "baseRefOid": base,
+            "headRefName": "feature", "headRefOid": head, "headRepository": {"name": "widgets"}, "headRepositoryOwner": {"login": "acme"},
+            "additions": 2, "deletions": 1, "changedFiles": 2, "url_": None,
+            "comments": [{"author": {"login": "alice"}, "body": "Looks **good**", "createdAt": "2026-10-01T00:00:00Z"}],
+            "reviews": [{"author": {"login": "dave"}, "state": "CHANGES_REQUESTED", "body": "", "submittedAt": "2026-10-03T00:00:00Z"}]}))
+
+    @classmethod
+    def rd(cls, *args, input=None, check=True, cwd=None) -> str:
+        return cls.rd_full(*args, input=input, check=check, cwd=cwd)[1]
+
+    def session(self):
+        import store
+        return store.open_session(self.sid)
+
+    def files(self):
+        return {f["path"]: f for f in self.session().manifest()["files"]}
+
+    def test_1_opens_the_pr_head_in_its_own_worktree_without_touching_the_users_clone(self):
+        m = self.session().meta()
+        wt = Path(m["repo"])
+        self.assertEqual(wt.resolve().parent, Path(self.env["REVIEW_DESK_HOME"]).resolve() / "worktrees")
+        self.assertEqual(git_in(wt, "rev-parse", "HEAD"), self.head)
+        self.assertEqual(set(self.files()), {"src/app.py", "src/new.py"}, "vs the merge-base: main's later README commit is not in the PR")
+        self.assertEqual(self.session().manifest()["base_label"], "main")
+        # the user's clone: same branch, edit intact, no worktree checkout in it
+        self.assertEqual(git_in(self.repo, "branch", "--show-current"), "my-branch")
+        self.assertEqual((self.repo / "README.md").read_text(), "my uncommitted edit\n")
+        self.assertEqual(m["pr"]["home_repo"], str(self.repo.resolve()))
+        self.assertEqual(m["title"], "PR #7: Change line 20")
+        self.assertIn('pr: "https://github.com/acme/widgets/pull/7"', self.open_out)
+        # the reviewer's context carries the description and the whole discussion, inline comments included
+        ctx = self.session().context_path.read_text()
+        for want in ("## Pull request acme/widgets#7: Change line 20", "Changes line 20.", "@alice commented",
+                     "@dave reviewed: changes requested", "@carol on src/app.py:20", "Why change line 20?"):
+            self.assertIn(want, ctx)
+        # the home view and the prompt hook find the desk from the user's clone
+        _, home, _ = self.rd_full(cwd=str(self.repo))
+        self.assertIn(self.sid, home)
+        # the PR page: a sandboxed page tab, no scripts from the PR text
+        pages = self.http("GET", f"/api/{self.sid}/state")[1]["pages"]
+        self.assertEqual([(p["id"], p["title"], p["open"]) for p in pages], [("P1", "PR #7", True)])
+        page = Path(pages[0]["path"]).read_text()
+        self.assertIn("default-src 'none'", page)
+        self.assertNotIn("<script>", page)
+        self.assertIn("&lt;script&gt;", page)
+        self.assertIn("Why change line 20?", page)
+
+    def test_2_reopen_follows_new_pushes_but_never_discards_local_work(self):
+        g = lambda repo, *a: git_in(repo, *a, env=self.env)  # noqa: E731
+        g(self.seed, "switch", "-q", "feature")
+        (self.seed / "src" / "more.py").write_text("MORE = 2\n")
+        g(self.seed, "add", "-A"); g(self.seed, "commit", "-qm", "push 2")
+        head2 = g(self.seed, "rev-parse", "HEAD")
+        g(self.seed, "push", "-q", str(self.bare), f"{head2}:refs/pull/7/head")
+        g(self.seed, "switch", "-q", "main")
+        self.write_pr(7, state="OPEN", base=self.base_tip, head=head2)
+        out = self.rd("open", "--pr", "acme/widgets#7", cwd=str(self.repo))
+        self.assertIn(f"sid: {self.sid}", out, "one session per PR")
+        self.assertIn(f"moved to {head2[:10]}", out)
+        self.assertIn("src/more.py", self.files())
+        wt = Path(self.session().meta()["repo"])
+        # an Execute implemented in the worktree: a later push does not move it
+        (wt / "src" / "new.py").write_text("NEW = 2\n")
+        g(self.seed, "switch", "-q", "feature")
+        (self.seed / "src" / "third.py").write_text("T = 3\n")
+        g(self.seed, "add", "-A"); g(self.seed, "commit", "-qm", "push 3")
+        head3 = g(self.seed, "rev-parse", "HEAD")
+        g(self.seed, "push", "-q", str(self.bare), f"{head3}:refs/pull/7/head")
+        g(self.seed, "switch", "-q", "main")
+        self.write_pr(7, state="OPEN", base=self.base_tip, head=head3)
+        out = self.rd("open", "--pr", "7", cwd=str(self.repo))
+        self.assertIn("the worktree has local work", out)
+        self.assertEqual((wt / "src" / "new.py").read_text(), "NEW = 2\n")
+        self.assertEqual(git_in(wt, "rev-parse", "HEAD"), head2)
+        pr = self.session().meta()["pr"]
+        self.assertEqual((pr["head_sha"], pr["latest_head"]), (head2, head3), "the reviewed commit is what the worktree holds")
+        self.assertIn("src/new.py", self.files(), "the diff shows the local edit")
+        self.assertNotIn("src/third.py", self.files())
+        # once the local work is gone, the next open catches up
+        g(wt, "checkout", "-q", "--", ".")
+        self.assertIn(f"moved to {head3[:10]}", self.rd("open", "--pr", "7", cwd=str(self.repo)))
+        self.assertEqual(self.session().meta()["pr"]["head_sha"], head3)
+
+    def test_3_merged_pr_diffs_against_the_base_it_merged_onto(self):
+        g = lambda repo, *a: git_in(repo, *a, env=self.env)  # noqa: E731
+        # PR 8 is merged with a merge commit: main now contains its head, so a merge-base with main's tip is the head
+        g(self.seed, "switch", "-qc", "pr8", self.base_tip)
+        (self.seed / "src" / "eight.py").write_text("E = 8\n")
+        g(self.seed, "add", "-A"); g(self.seed, "commit", "-qm", "pr 8")
+        head8 = g(self.seed, "rev-parse", "HEAD")
+        g(self.seed, "switch", "-q", "main")
+        g(self.seed, "merge", "-q", "--no-ff", "-m", "merge pr 8", "pr8")
+        g(self.seed, "push", "-q", str(self.bare), "main", f"{head8}:refs/pull/8/head")
+        self.write_pr(8, state="MERGED", base=self.base_tip, head=head8)
+        out = self.rd("open", "--pr", "https://github.com/acme/widgets/pull/8", cwd=tempfile.gettempdir())
+        sid8 = out.split("sid: ")[1].split()[0].strip('"')
+        import store
+        s8 = store.open_session(sid8)
+        self.assertEqual([f["path"] for f in s8.manifest()["files"]], ["src/eight.py"])
+        # opened outside any clone of acme/widgets: a cached clone, and no home repo
+        self.assertTrue((Path(self.env["REVIEW_DESK_HOME"]) / "clones" / "github.com" / "acme" / "widgets" / ".git").exists())
+        self.assertIsNone(s8.meta()["pr"]["home_repo"])
+
+    def test_4_execute_on_a_pr_asks_post_or_implement_and_post_makes_one_review(self):
+        sid = self.sid
+        head = git_in(Path(self.session().meta()["repo"]), "rev-parse", "HEAD")
+        self.rd("backlog", sid, "add", "--title", "Inline one", "--anchor", "src/app.py:19-21", "--from", "1", "--detail", "- **Issue:** x")
+        self.rd("backlog", sid, "add", "--title", "Outside the diff", "--anchor", "src/app.py:2", "--from", "1")
+        self.rd("backlog", sid, "add", "--title", "No anchor", "--kind", "question", "--from", "1")
+        self.assertEqual(self.http("POST", f"/api/{sid}/execute", {"ids": ["B1", "B2", "B3"]})[0], 200)
+        handoff = self.rd("handoff", sid)
+        self.assertIn("ask the user (AskUserQuestion) whether to post them as a GitHub review or implement them", handoff)
+        self.assertIn(f"pr {sid} post B1 B2 B3 --dry-run", handoff)
+        # the agent driving the desk gets the same choice from its PostToolUse hook
+        ctx = self.rd("hook", "tool", input=json.dumps({"session_id": "a1", "cwd": str(self.repo), "tool_name": "Bash",
+                                                      "tool_input": {"command": f"review-desk-axi status {sid}"}, "tool_response": {"stdout": ""}}))
+        self.assertIn("post them as a GitHub review", ctx)
+        dry = self.rd("pr", sid, "post", "B1", "B2", "B3", "--dry-run")
+        self.assertIn('B1,"src/app.py:19-21",Inline one', dry)
+        self.assertIn("src/app.py:2 is outside the PR's diff", dry)
+        self.assertFalse((self.fake / "reviews-7.jsonl").exists(), "a dry run posts nothing")
+        self.rd("backlog", sid, "ack", "B1", "B2", "B3")
+        out = self.rd("pr", sid, "post", "B1", "B2", "B3")
+        self.assertIn("review: \"https://github.com/acme/widgets/pull/7#pullrequestreview-1\"", out)
+        [payload] = [json.loads(l) for l in (self.fake / "reviews-7.jsonl").read_text().splitlines()]
+        self.assertEqual((payload["commit_id"], payload["event"]), (head, "COMMENT"))
+        self.assertEqual([(c["path"], c.get("start_line"), c["line"], c["side"]) for c in payload["comments"]], [("src/app.py", 19, 21, "RIGHT")])
+        self.assertIn("**Inline one**\n\n- **Issue:** x", payload["comments"][0]["body"])
+        self.assertIn("`src/app.py:2`", payload["body"])
+        self.assertIn("**No anchor**", payload["body"])
+        items = {i["id"]: i for i in self.session().backlog()}
+        self.assertEqual({i["status"] for i in items.values()}, {"done"})
+        self.assertIn("pullrequestreview-1", items["B1"]["note"])
+        # a retry never posts twice
+        again = self.rd("pr", sid, "post", "B1")
+        self.assertIn("already_posted[1]", again)
+        self.assertEqual(len((self.fake / "reviews-7.jsonl").read_text().splitlines()), 1)
+
+    def test_5_bad_links_and_non_pr_sessions_fail_cleanly(self):
+        code, out, _ = self.rd_full("open", "--pr", "https://example.com/nope", check=False)
+        self.assertEqual(code, 2)
+        self.assertTrue(out.startswith("error: "))
+        code, out, _ = self.rd_full("open", "--pr", "acme/widgets#7", "--base", "main", check=False)
+        self.assertEqual(code, 2)
+        self.assertIn("--pr takes the code from the pull request", out)
+        plain = self.rd("open", "--title", "plain", "--repo", str(self.repo)).split("sid: ")[1].split()[0]
+        code, out, _ = self.rd_full("pr", plain, "post", "B1", check=False)
+        self.assertEqual(code, 1)
+        self.assertIn("does not review a pull request", out)
 
 
 class GitDiffTest(unittest.TestCase):

@@ -20,7 +20,6 @@ import secrets
 import sys
 import threading
 import time
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -269,7 +268,9 @@ class Handler(BaseHTTPRequestHandler):
             if rest == "story":
                 page = s.meta().get("page")
                 if not page or not Path(page).is_file():
-                    return self.send(200, b"<!doctype html><body style='background:#050505;color:#a1a1aa;font:14px Inter,sans-serif;padding:40px'>No summary page for this session.</body>",
+                    what = (b"No summary page: this desk reviews a pull request, whose description and discussion are in the PR tab."
+                            if s.meta().get("pr") else b"No summary page for this session.")
+                    return self.send(200, b"<!doctype html><body style='background:#050505;color:#a1a1aa;font:14px Inter,sans-serif;padding:40px'>" + what + b"</body>",
                                      "text/html; charset=utf-8")
                 return self.send(200, Path(page).read_bytes(), "text/html; charset=utf-8")
             return self.fail(404, "not found")
@@ -457,10 +458,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"seq": e["seq"], "item": item["id"]})
         if rest == "execute":
             ids = [str(i) for i in body.get("ids") or []]
-            open_ids = [i["id"] for i in s.backlog() if i["status"] in store.OPEN_STATUSES]
-            ids = [i for i in ids if i in open_ids] if ids else open_ids
+            status = {i["id"]: i["status"] for i in s.backlog()}
+            # A ticked item the main agent accepted but never finished (acked) can be executed again: it goes
+            # back to handed-off so the Execute is pending and delivered. "Execute all open" leaves acked work alone.
+            ids = [i for i in ids if status.get(i) in (*store.OPEN_STATUSES, "acked")] if ids \
+                else [i for i, st in status.items() if st in store.OPEN_STATUSES]
             if not ids:
                 return self.fail(400, "nothing to execute")
+            again = [i for i in ids if status[i] == "acked"]
+            if again:
+                s.backlog_status(again, "handed-off", by="user", note="executed again from the desk")
             e = s.post("execute", "user", ids=ids)
             return self.json({"seq": e["seq"], "ids": ids})
         if rest == "backlog":

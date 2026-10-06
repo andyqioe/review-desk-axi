@@ -193,7 +193,7 @@
    "name": "main-tier-handoff",
    "role": "main",
    "prompt": "[task notification from the Review Desk reviewer]\nHANDOFF sid={SID} tier=opus/high\n\n{HANDOFF}",
-   "expected_output": "The main agent acks B1 (tracking it, not implementing it), changes no code, and immediately respawns the reviewer as review-desk-high on opus without asking the user anything.",
+   "expected_output": "The main agent leaves B1 for the user (no ack: nobody executed it), changes no code, and immediately respawns the reviewer as review-desk-high on opus without asking the user anything.",
    "files": [],
    "setup": {
     "fixture": "csv-ingest",
@@ -256,7 +256,8 @@
    },
    "driver": [],
    "expectations": [
-    "B1 is acked (tracked) and not marked done",
+    "B1 is left for the user to execute (handed-off): not acked, not done",
+    "The final message reports B1 as still open",
     "No repository file was modified",
     "The final message names a review-desk-high reviewer on model opus",
     "The final message does not ask the user to choose a model"
@@ -267,7 +268,13 @@
      "ids": [
       "B1"
      ],
-     "status": "acked"
+     "status": "handed-off"
+    },
+    {
+     "fn": "final_mentions",
+     "all": [
+      "B1"
+     ]
     },
     {
      "fn": "repo_unchanged"
@@ -294,7 +301,7 @@
    "name": "main-inbox-execute-one",
    "role": "main",
    "prompt": "{INBOX}\n\nmorning. go ahead and fix B1 from yesterday's review - bad rows should be quarantined, not blow up the whole file",
-   "expected_output": "From the injected inbox context the main agent runs handoff and acks both items, implements only B1 (short rows quarantined instead of raising), marks B1 done with a note, refreshes the desk with reload, leaves B2 acked, and asks the user the B2 question instead of deciding it.",
+   "expected_output": "From the injected inbox context the main agent runs handoff, acks only B1 (the item the user asked for), implements only B1 (short rows quarantined instead of raising), marks B1 done with a note, refreshes the desk with reload, leaves B2 un-acked for the user, and asks the user the B2 question instead of deciding it.",
    "files": [],
    "setup": {
     "fixture": "csv-ingest",
@@ -346,7 +353,7 @@
    "driver": [],
    "expectations": [
     "B1 is done with a note",
-    "B2 is acked, not done or dismissed",
+    "B2 is left for the user (handed-off): not acked, done or dismissed",
     "parse() no longer raises ValueError on a short row",
     "The fixture's tests pass",
     "The desk was refreshed with reload after B1 was done",
@@ -365,7 +372,7 @@
      "ids": [
       "B2"
      ],
-     "status": "acked"
+     "status": "handed-off"
     },
     {
      "fn": "file_lacks",
