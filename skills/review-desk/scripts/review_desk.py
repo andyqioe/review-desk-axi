@@ -224,14 +224,25 @@ def inbox(cwd: Path | None) -> list[dict]:
     """Sessions with backlog the main agent has not accepted, whose reviewer is gone."""
     out = []
     for s in repo_sessions(cwd):
-        items = [i for i in s.backlog() if i["status"] in store.OPEN_STATUSES]
         execute = s.execute_requested()
+        # open = never handed to an agent; handed-off and not executed waits on the user, not on the agent
+        items = [i for i in s.backlog() if i["status"] == "open" or (i["status"] == "handed-off" and i["id"] in execute)]
         p = s.presence()
         if p["live"] or not (items or execute):
             continue
         out.append({"sid": s.sid, "title": s.meta().get("title"), "items": items, "execute": execute,
                     "unanswered": len(s.unanswered()), "reviewer": p})
     return out
+
+
+UNFINISHED_HINT = (f"Close each unfinished item: `{BIN} backlog <sid> done <id> --note \"<what changed, path:line>\"`, "
+                   f"`reopen <id> --note \"<what remains>\"`, or `dismiss <id> --note \"<why>\"`")
+
+
+def unfinished_rows(sessions: list) -> list[dict]:
+    """Items an agent acked (accepted) and never closed: the work that silently stalls after a context reset."""
+    return [{"sid": s.sid, "id": i["id"], "acked_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(i["acked_at"])) if i.get("acked_at") else "?",
+             "title": i["title"], "key": f"{s.sid}:{i['id']}:acked:{i.get('acked_at')}"} for s in sessions for i in s.unfinished()]
 
 
 def undelivered_rows(rows: list[dict]) -> list[dict]:
@@ -261,9 +272,14 @@ def home(cwd: Path, limit: int = 5) -> list[dict]:
     und = undelivered_rows(pending)
     if und or any(r["execute"] for r in pending):
         table("undelivered", und, ["sid", "id", "status", "kind", "execute", "title"])
+    unf = unfinished_rows(ss)
+    if unf:
+        table("unfinished", unf, ["sid", "id", "acked_at", "title"])
     hints = []
     for r in pending:
-        hints.append(run(f"handoff {r['sid']}") + " then track and ack the items (review-desk skill: When the reviewer hands back)")
+        hints.append(run(f"handoff {r['sid']}") + " then handle it (review-desk skill: When the reviewer hands back)")
+    if unf:
+        hints.append(UNFINISHED_HINT)
     if rows:
         hints.append(run("status <sid>"))
     hints.append(run('open --title "<what to review>" --repo .') + " to review the working tree")
@@ -639,9 +655,24 @@ def cmd_handoff(a) -> int:
         if i.get("detail") and i["detail"] != i["title"]:
             block(f"detail_{i['id']}", i["detail"])
     if items:
-        help_block([run(f"backlog {s.sid} ack {' '.join(i['id'] for i in items)}") + " once tracked in your task list",
-                    run(f'backlog {s.sid} done <id> --note "<what changed, path:line>"') + " after implementing"])
+        help_block(handoff_hints(s.sid, execute, [i for i in items if i["id"] not in execute]))
     return 0
+
+
+def handoff_hints(sid: str, execute: list[str], rest: list[dict]) -> list[str]:
+    """Ack means "accepted, implementing now", so only executed items are acked. An item acked without an
+    Execute used to drop out of every list and could never be executed: it stayed acked forever."""
+    hints = []
+    if execute:
+        hints += [run(f"backlog {sid} ack {' '.join(execute)}") + " to accept the items the user executed, then implement them",
+                  run(f'backlog {sid} done <id> --note "<what changed, path:line>"') + " after each",
+                  run(f'backlog {sid} reopen <id> --note "<what remains>"') + " for one that is only partly done"]
+    questions = [i["id"] for i in rest if i.get("kind") == "question"]
+    if rest:
+        hints.append(f"Leave {' '.join(i['id'] for i in rest)} open and do not ack them: report them; the user executes them from the desk when ready")
+    if questions:
+        hints.append(f"Put {' '.join(questions)} to the user now: a question item needs their answer, not an Execute")
+    return hints
 
 
 def cmd_detach(a) -> int:
@@ -673,6 +704,8 @@ def cmd_status(a) -> int:
         hints.append(spawn_hint(s.sid, w.get("model", "<model>"), w.get("effort", "<effort>")) + " (messages are queued)")
     if counts["open"] or counts["handed-off"]:
         hints.append(run(f"handoff {s.sid}"))
+    if counts["acked"]:
+        hints.append(UNFINISHED_HINT.replace("<sid>", s.sid) + f" ({' '.join(i['id'] for i in s.unfinished())} accepted, not done)")
     help_block(hints)
     return 0
 
@@ -883,9 +916,10 @@ def delivery_text(s: store.Session, events: list[dict], via: str, to: str | None
                 f"do not restart the reviewer.")
     ids = s.execute_requested()
     items = {i["id"]: i for i in s.handoff()}
-    lines = [f"Review Desk {s.sid} ({title}): the user pressed Execute for {' '.join(ids)}. Implement exactly these items "
-             f"now (finish or park your current step first), then run `{BIN} backlog {s.sid} done <id> --note \"<what changed, path:line>\"` "
-             f"for each, rebuild the summary (implementation-summary, Backlog follow-up form) and `{BIN} reload {s.sid}`."]
+    lines = [f"Review Desk {s.sid} ({title}): the user pressed Execute for {' '.join(ids)}. Run `{BIN} backlog {s.sid} ack {' '.join(ids)}`, "
+             f"implement exactly these items now (finish or park your current step first), then run "
+             f"`{BIN} backlog {s.sid} done <id> --note \"<what changed, path:line>\"` for each (or `reopen <id> --note \"<what remains>\"` "
+             f"if one is only partly done), rebuild the summary (implementation-summary, Backlog follow-up form) and `{BIN} reload {s.sid}`."]
     for i in (items[x] for x in ids if x in items):
         anchor = f" @ {i['anchor']}" if i.get("anchor") else ""
         lines.append(f"- {i['id']} [{i.get('kind') or 'fix'}] {i['title']}{anchor}")
@@ -916,6 +950,35 @@ def deliver_owned(agent: str | None, via: str) -> list[str]:
     return out
 
 
+def hook_seen(session: str | None, add: set[str] | None = None) -> set[str]:
+    """Keys this agent session was already told about, so each hook says a thing once per session."""
+    f = store.home() / "hook-seen" / f"{session or 'x'}.json"
+    seen = set(json.loads(f.read_text())) if f.exists() else set()
+    if add and add - seen:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(sorted(seen | add)))
+    return seen
+
+
+def unfinished_nudge(agent: str | None) -> list[str]:
+    """At Stop, remind the owning agent once per acceptance about items it acked and never closed."""
+    seen = hook_seen(agent)
+    rows = []
+    for sid in store.owned(agent or ""):
+        try:
+            rows += [r for r in unfinished_rows([store.open_session(sid)]) if r["key"] not in seen]
+        except KeyError:
+            continue
+    if not rows:
+        return []
+    hook_seen(agent, {r["key"] for r in rows})
+    listed = "; ".join(f"{r['sid']} {r['id']} ({r['title']})" for r in rows)
+    return [f"Review Desk: you accepted {listed} but never closed {'it' if len(rows) == 1 else 'them'}. If an item is finished, run "
+            f"`{BIN} backlog <sid> done <id> --note \"<what changed, path:line>\"`; if it is partly done, "
+            f"`reopen <id> --note \"<what remains>\"`; if you will not do it, `dismiss <id> --note \"<why>\"`. "
+            f"If you are still working on it or waiting on the user, say so in your reply."]
+
+
 def cmd_hook(a) -> int:
     """Session hooks. Never fail: a hook bug must not block a session or a prompt.
     tool (PostToolUse) and stop (Stop) deliver Execute/End to the owning agent even while it is busy."""
@@ -925,6 +988,8 @@ def cmd_hook(a) -> int:
             if a.event == "tool":
                 claim_from_tool(data)
             texts = deliver_owned(data.get("session_id"), f"hook:{a.event}")
+            if a.event == "stop" and not texts and not data.get("stop_hook_active"):
+                texts = unfinished_nudge(data.get("session_id"))
             if texts and a.event == "tool":
                 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "\n\n".join(texts)}}))
             elif texts:
@@ -934,9 +999,7 @@ def cmd_hook(a) -> int:
         if a.event == "prompt":
             for text in deliver_owned(data.get("session_id"), "hook:prompt"):
                 print(text)
-        seen_dir = store.home() / "hook-seen"
-        seen_file = seen_dir / f"{data.get('session_id', 'x')}.json"
-        seen = set(json.loads(seen_file.read_text())) if seen_file.exists() else set()
+        seen = hook_seen(data.get("session_id"))
         if a.event == "session":
             rows = home(cwd)
         else:
@@ -949,10 +1012,17 @@ def cmd_hook(a) -> int:
             if fresh:
                 kv("review_desk", "a reviewer is gone and these backlog items never reached you")
                 table("undelivered", undelivered_rows(fresh), ["sid", "id", "status", "kind", "execute", "title"])
-                help_block([run(f"handoff {r['sid']}") + " then track and ack them" for r in fresh])
-        if keys - seen:
-            seen_dir.mkdir(parents=True, exist_ok=True)
-            seen_file.write_text(json.dumps(sorted(seen | keys)))
+                help_block([run(f"handoff {r['sid']}") + " then handle it (review-desk skill: When the reviewer hands back)" for r in fresh])
+            # accepted work nobody closed, once per acceptance per session: it survives a context reset this way
+            unf = [r for r in unfinished_rows(repo_sessions(cwd)) if r["key"] not in seen]
+            if unf:
+                kv("review_desk_unfinished", "backlog items an agent accepted (acked) but never closed")
+                table("unfinished", unf, ["sid", "id", "acked_at", "title"])
+                help_block([UNFINISHED_HINT])
+                keys |= {r["key"] for r in unf}
+        if a.event == "session":
+            keys |= {r["key"] for r in unfinished_rows(repo_sessions(cwd))}  # the home view just listed them
+        hook_seen(data.get("session_id"), keys)
     except Exception:
         pass
     return 0

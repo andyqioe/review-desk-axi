@@ -106,15 +106,16 @@ If `claude` cannot run headless on this machine, fall back to a background subag
 
 ## When the reviewer hands back
 
-`watch` prints one `event:` line and the `handoff` output (every backlog item you have not accepted yet).
-Track every listed item in your task list and run `review-desk-axi backlog <sid> ack <ids>`; that stops the prompt hook from re-sending them.
+`watch` prints one `event:` line and the `handoff` output: every backlog item you have not accepted yet, with `execute_requested` naming the ones the user executed.
+Ack means "accepted, implementing now": run `review-desk-axi backlog <sid> ack <ids>` for the executed items only, and leave the rest open so the user can execute them from the desk later; still put each open `question` item to the user, since it needs their answer rather than an Execute.
+An acked item is yours until you close it with `done`, `reopen` or `dismiss`; the hooks and the home view list it as `unfinished` until you do.
 
 - `EXECUTE`: implement exactly the `execute_requested` items.
   For a `suggested-edit` item, apply its patch (check it still applies; if the code moved, apply the intent).
   For a `question` item, ask the user.
-  After each item, run `backlog <sid> done <id> --note "<what changed, path:line>"`; drop one with `dismiss --note "<why>"`.
+  After each item, run `backlog <sid> done <id> --note "<what changed, path:line>"`; if it is only partly done, `reopen <id> --note "<what remains>"` hands it back to the user; drop one with `dismiss --note "<why>"`.
   Then refresh the desk (`/implementation-summary` "Backlog follow-up" rebuilds the page and diffs; otherwise `review-desk-axi reload <sid>` recomputes them from git) and start `watch` again in the background. The reviewer is still running with its context; do not restart it.
-- `END`: report the open items in one or two lines and leave them in your task list.
+- `END`: report the open items in one or two lines; do not ack them.
 - `REVIEWER_EXITED (idle|crashed|stopped)`: report the open items; if the user is still reviewing, `reviewer <sid> start` resumes the same conversation (or starts fresh and briefs it after a desk upgrade), then `watch` again.
 - `TIMEOUT`: start `watch` again; nothing happened.
 
@@ -122,6 +123,7 @@ From a subagent reviewer (fallback), the final message carries the keyword inste
 
 The SessionStart hook prints the home view; the UserPromptSubmit hook injects backlog a dead reviewer never delivered, once per item per session.
 When either lists `undelivered` items, run `handoff <sid>` and handle the result as above.
+Both also list `unfinished` items (acked, never closed), and the Stop hook reminds the owning agent once per acceptance: close each with `done`, `reopen` or `dismiss`.
 
 ## Delivery
 

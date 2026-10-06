@@ -77,11 +77,10 @@ def golden(r: Run) -> None:
         r.rd("reload", r.sid)
         r.final("Done B1, B2. Respawned review-desk-low with model sonnet.\n")
     elif r.id == 3:
-        r.rd("backlog", r.sid, "ack", "B1")
-        r.final("Tracked B1. Spawned review-desk-high on model opus.\n")
+        r.final("B1 stays open for you to execute. Spawned review-desk-high on model opus.\n")
     elif r.id == 4:
         r.rd("handoff", r.sid)
-        r.rd("backlog", r.sid, "ack", "B1", "B2")
+        r.rd("backlog", r.sid, "ack", "B1")
         src = (r.repo / "src" / "parse.py").read_text().replace(
             '            raise ValueError(f"short row: {line!r}")\n', '            quarantined.append(line)\n            continue\n'
         ).replace("    rows = []\n", "    rows, quarantined = [], []\n")

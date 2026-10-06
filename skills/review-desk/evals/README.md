@@ -7,8 +7,8 @@ The skill has two roles, so the evals cover both:
 |---|---|---|
 | 1 | main | open a session, pin the code moments, set prefs, spawn the chosen tier without asking |
 | 2 | main | EXECUTE hand-back: ack, implement a fix and a suggested patch, mark done with notes, reload, respawn at the wanted tier |
-| 3 | main | HANDOFF hand-back: ack only, no code, respawn the new tier without asking |
-| 4 | main | the prompt hook's injected `undelivered` context: handoff, ack, report, no code |
+| 3 | main | HANDOFF hand-back: no ack (nothing was executed), no code, respawn the new tier without asking |
+| 4 | main | the prompt hook's injected `undelivered` context: handoff, ack and fix only the item the user asks for, leave the question open and ask it |
 | 5 | reviewer | answer two questions, log exactly the real gap with a five-bullet detail (Context, Issue, Suggested fix, Reasoning, Tests), cite `path:line`, exit END |
 | 6 | reviewer | tier change mid-session: hand over, leave the next question for the new reviewer, exit HANDOFF |
 | 7 | reviewer | asked to edit code itself: refuse, log it with a five-bullet detail, exit EXECUTE when the user executes |
