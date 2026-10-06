@@ -947,7 +947,16 @@ async function refresh() {
     renderTree();
     $("#title").textContent = st.session.title || "Review";
     const m = S.manifest;
-    $("#meta").textContent = [st.session.repo && st.session.repo.split("/").pop(), m.base_label && `vs ${m.base_label}`].filter(Boolean).join(" · ");
+    const pr = st.session.pr, meta = $("#meta");
+    meta.textContent = [pr ? "" : st.session.repo && st.session.repo.split("/").pop(), m.base_label && `vs ${m.base_label}`].filter(Boolean).join(" · ");
+    if (pr) {
+      // a PR desk names the pull request, not its worktree folder, and links to it on GitHub
+      const a = document.createElement("a");
+      a.href = pr.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = `${pr.owner}/${pr.repo}#${pr.number}`;
+      a.title = `Open the pull request on GitHub (@${pr.author}, ${pr.base_ref} ← ${pr.head_ref})`;
+      meta.prepend(a, meta.textContent ? " · " : "");
+    }
     const story = $("#story");
     if (first) story.src = `/s/${D.sid}/story?t=${encodeURIComponent(D.token)}`;
     else if (again) { story.contentWindow.location.reload(); if (S.active !== "story") renderCode(); toast("Summary and diffs reloaded"); }
@@ -1017,6 +1026,9 @@ function syncPages(first) {
     }
     S.pageSeen.set(pg.id, { focus: pg.focus, mtime: pg.mtime });
   });
+  // a desk without a summary (a pull request) has an empty Story: start on its first page instead
+  const firstOpen = pages.find((pg) => pg.open);
+  if (first && !S.state.session.page && S.active === "story" && firstOpen) jump = `page:${firstOpen.id}`;
   const sig = JSON.stringify(pages.map((pg) => [pg.id, pg.open, pageName(pg), pg.mtime]));
   if (sig !== S.pageSig) { S.pageSig = sig; renderPages(); }
   if (jump) {

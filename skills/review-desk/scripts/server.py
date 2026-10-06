@@ -20,7 +20,6 @@ import secrets
 import sys
 import threading
 import time
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -269,7 +268,9 @@ class Handler(BaseHTTPRequestHandler):
             if rest == "story":
                 page = s.meta().get("page")
                 if not page or not Path(page).is_file():
-                    return self.send(200, b"<!doctype html><body style='background:#050505;color:#a1a1aa;font:14px Inter,sans-serif;padding:40px'>No summary page for this session.</body>",
+                    what = (b"No summary page: this desk reviews a pull request, whose description and discussion are in the PR tab."
+                            if s.meta().get("pr") else b"No summary page for this session.")
+                    return self.send(200, b"<!doctype html><body style='background:#050505;color:#a1a1aa;font:14px Inter,sans-serif;padding:40px'>" + what + b"</body>",
                                      "text/html; charset=utf-8")
                 return self.send(200, Path(page).read_bytes(), "text/html; charset=utf-8")
             return self.fail(404, "not found")

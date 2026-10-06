@@ -5,11 +5,13 @@ Run with no arguments for the home view (this repo's sessions and any undelivere
 
 Main agent
   open --title T [--dir D] [--page P] [--summary S] [--notes N] [--repo R]   create or reuse a session
+  open --pr <github PR link | owner/repo#N | N>    review a pull request (its head in a worktree of its own)
   add <sid> <path[:a-b]>... [--note N] [--focus]   pin files or ranges into the editor
   page <sid> open <file.html> [--title T] [--background] | close <P#|path> | list
                                                    show an HTML page as a read-only editor tab
   run <sid> -- <command...>                        run a page generator; writes confined to pages/
   handoff <sid>                                    backlog the main agent has not accepted yet
+  pr <sid> post <ids> [--dry-run] [--event E]      post backlog items to the PR as one GitHub review
   backlog <sid> ack|done|dismiss|reopen <ids> [--note N]
   status <sid> | url <sid> | reload <sid> [--page P] | end <sid> | prefs [--model M --effort E]
   prompt <sid> --model M --effort E               reviewer instructions for a general-purpose spawn
@@ -195,6 +197,9 @@ def file_map(manifest: dict) -> list[str]:
 def build_context(s: store.Session, summary: Path | None, notes: Path | None) -> None:
     m = s.meta()
     parts = [f"# Review context: {m.get('title', '')}", "", f"repo: {m.get('repo')}   page: {m.get('page') or '-'}", ""]
+    pr_md = s.dir / "pr.md"
+    if m.get("pr") and pr_md.is_file():
+        parts += [pr_md.read_text(encoding="utf-8").strip(), ""]
     if summary and summary.is_file():
         parts += ["## Implementation summary (what the user is reviewing)", "", strip_inventory(summary.read_text(encoding="utf-8")).strip(), ""]
     if notes and notes.is_file():
@@ -214,9 +219,18 @@ def repo_of(cwd: Path) -> Path:
     return cwd.resolve()
 
 
+def session_repos(m: dict) -> set[Path]:
+    """The checkouts a session belongs to: its repo, and for a PR also the user's clone it was fetched into,
+    so the home view and the hooks find a PR desk from the project the user works in."""
+    repos = {Path(m.get("repo", "/")).resolve()}
+    if (m.get("pr") or {}).get("home_repo"):
+        repos.add(Path(m["pr"]["home_repo"]).resolve())
+    return repos
+
+
 def repo_sessions(cwd: Path | None) -> list[store.Session]:
     root = repo_of(cwd) if cwd else None
-    out = [s for s in store.sessions() if root is None or Path(s.meta().get("repo", "/")).resolve() == root]
+    out = [s for s in store.sessions() if root is None or root in session_repos(s.meta())]
     return sorted(out, key=lambda s: s.meta().get("created", 0), reverse=True)
 
 
@@ -283,6 +297,7 @@ def home(cwd: Path, limit: int = 5) -> list[dict]:
     if rows:
         hints.append(run("status <sid>"))
     hints.append(run('open --title "<what to review>" --repo .') + " to review the working tree")
+    hints.append(run("open --pr <github PR link>") + " to review a pull request")
     help_block(hints)
     return pending
 
@@ -293,17 +308,51 @@ def cmd_home(a) -> int:
     return 0
 
 
+def gitdiff_write(s: store.Session, repo: Path, base: str, paths: list[str] | None, label: str | None = None) -> int:
+    import gitdiff
+    try:
+        return len(gitdiff.write(repo, s.dir, base, paths, label)["files"])
+    except subprocess.CalledProcessError as e:
+        raise DeskError(f"git diff failed in {repo}: {e.stderr.strip() if e.stderr else e}", ["Pass --repo <git checkout>"])
+
+
+def open_pr(a) -> tuple[store.Session, dict]:
+    """A GitHub PR as a session: one per PR (reopening refreshes it), its head in a worktree of its own."""
+    import ghpr
+    if a.dir or a.page or a.base or a.paths:
+        raise DeskError("--pr takes the code from the pull request; drop --dir, --page, --base and --paths", [run("open --pr <link>")], 2)
+    cwd = Path(a.repo).resolve()
+    ref = ghpr.parse_ref(a.pr, cwd)
+    directory = store.home() / "prs" / ref["host"] / ref["owner"] / ref["repo"] / str(ref["number"])
+    previous = (store.read_json(directory / "session.json") or {}).get("pr") or {}
+    view = ghpr.fetch_meta(ref)
+    where = ghpr.materialize(ref, view, cwd, previous.get("head_sha"))
+    pr = ghpr.info(ref, view, where)
+    s = store.create(directory, title=a.title or f"PR #{pr['number']}: {pr['title']}", repo=where["worktree"], editor=a.editor, pr=pr)
+    gitdiff_write(s, Path(where["worktree"]), where["merge_base"], None, pr["base_ref"])
+    (s.dir / "pr.md").write_text(ghpr.context_md(pr, view), encoding="utf-8")
+    # the description and discussion as a page tab: pages render sandboxed, the Story frame does not
+    page = s.pages_dir / "pr.html"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(ghpr.page_html(pr, view), encoding="utf-8")
+    if not s.page(str(page)):  # first open only: a reopen refreshes the file and leaves the user's tabs alone
+        s.page_open(str(page), title=f"PR #{pr['number']}", focus=True, by="main")
+    s.update_meta(reloaded=store.now())  # an open desk picks up a new head
+    return s, {"pr": pr["url"], "worktree": f"{tilde(Path(where['worktree']))} ({where['worktree_state']})",
+               "head": f"{pr['head_sha'][:10]} vs merge-base {pr['merge_base'][:10]} on {pr['base_ref']}"}
+
+
 def cmd_open(a) -> int:
-    repo = Path(a.repo).resolve()
-    directory = Path(a.dir) if a.dir else None
-    page = str(Path(a.page).resolve()) if a.page else None
-    s = store.create(directory, title=a.title, repo=str(repo), page=page, editor=a.editor)
-    if not s.manifest_path.exists():
-        import gitdiff
-        try:
-            gitdiff.write(repo, s.dir, a.base or "HEAD", a.paths)
-        except subprocess.CalledProcessError as e:
-            raise DeskError(f"git diff failed in {repo}: {e.stderr.strip() if e.stderr else e}", ["Pass --repo <git checkout>"])
+    extra = {}
+    if a.pr:
+        s, extra = open_pr(a)
+    else:
+        repo = Path(a.repo).resolve()
+        directory = Path(a.dir) if a.dir else None
+        page = str(Path(a.page).resolve()) if a.page else None
+        s = store.create(directory, title=a.title or "Review", repo=str(repo), page=page, editor=a.editor)
+        if not s.manifest_path.exists():
+            gitdiff_write(s, repo, a.base or "HEAD", a.paths)
     build_context(s, Path(a.summary) if a.summary else None, Path(a.notes) if a.notes else None)
     h = ensure_server()
     url = url_for(s)
@@ -318,6 +367,8 @@ def cmd_open(a) -> int:
     p = store.prefs()
     kv("sid", s.sid)
     kv("url", url)
+    for k, v in extra.items():
+        kv(k, v)
     kv("browser", browser)
     kv("dir", tilde(s.dir))
     kv("files", len(s.manifest().get("files", [])))
@@ -325,9 +376,9 @@ def cmd_open(a) -> int:
     kv("last_tier", f"{p.get('model', 'haiku')}/{p.get('effort', 'low')}")
     help_block([run(f'add {s.sid} <path:a-b> --note "<why read this first>"') + " to pin the 1-3 code moments",
                 f"Ask the user for model and effort (last: {p.get('model', 'haiku')}/{p.get('effort', 'low')}), then "
-                + run(f"prefs --model <model> --effort <effort>"),
+                + run("prefs --model <model> --effort <effort>"),
                 spawn_hint(s.sid),
-                f"End your reply with the url alone on its last line (`↗ <url>`); the reviewer's exit notifies you"])
+                "End your reply with the url alone on its last line (`↗ <url>`); the reviewer's exit notifies you"])
     return 0
 
 
@@ -655,14 +706,30 @@ def cmd_handoff(a) -> int:
         if i.get("detail") and i["detail"] != i["title"]:
             block(f"detail_{i['id']}", i["detail"])
     if items:
-        help_block(handoff_hints(s.sid, execute, [i for i in items if i["id"] not in execute]))
+        help_block(handoff_hints(s, execute, [i for i in items if i["id"] not in execute]))
     return 0
 
 
-def handoff_hints(sid: str, execute: list[str], rest: list[dict]) -> list[str]:
+def pr_choice(s: store.Session, ids: list[str]) -> str | None:
+    """On a pull request desk, Execute means one of two things, and only the user knows which."""
+    pr = s.meta().get("pr")
+    if not pr:
+        return None
+    ids_s = " ".join(ids) or "<ids>"
+    return (f"This desk reviews pull request {pr['url']} by @{pr.get('author')}. Before acting on {ids_s}, ask the user "
+            f"(AskUserQuestion) whether to post them as a GitHub review or implement them. Post: "
+            f"`{BIN} pr {s.sid} post {ids_s} --dry-run`, show where each lands, then run it without --dry-run "
+            f"(one review; the items close as done with its link). Implement: edit the PR worktree {pr['worktree']} "
+            f"(detached at the PR head), then `{BIN} reload {s.sid}`; commit or push to {pr['head_ref']} only when the user says so.")
+
+
+def handoff_hints(s: store.Session, execute: list[str], rest: list[dict]) -> list[str]:
     """Ack means "accepted, implementing now", so only executed items are acked. An item acked without an
     Execute used to drop out of every list and could never be executed: it stayed acked forever."""
+    sid = s.sid
     hints = []
+    if execute and (choice := pr_choice(s, execute)):
+        hints.append(choice)
     if execute:
         hints += [run(f"backlog {sid} ack {' '.join(execute)}") + " to accept the items the user executed, then implement them",
                   run(f'backlog {sid} done <id> --note "<what changed, path:line>"') + " after each",
@@ -673,6 +740,43 @@ def handoff_hints(sid: str, execute: list[str], rest: list[dict]) -> list[str]:
     if questions:
         hints.append(f"Put {' '.join(questions)} to the user now: a question item needs their answer, not an Execute")
     return hints
+
+
+def cmd_pr(a) -> int:
+    """Post backlog items to the session's pull request as one GitHub review."""
+    import ghpr
+    s = session(a.sid)
+    pr = s.meta().get("pr")
+    if not pr:
+        raise DeskError(f"session {s.sid} does not review a pull request", [run("open --pr <github PR link>")])
+    known = {i["id"]: i for i in s.backlog()}
+    ids = [x.upper() for x in a.ids]
+    missing = [x for x in ids if x not in known]
+    if missing:
+        raise DeskError(f"no backlog item {', '.join(missing)}", [run(f"backlog {s.sid} list --all")], 2)
+    posted = [x for x in ids if known[x].get("posted") and not a.again]
+    items = [known[x] for x in ids if x not in posted]
+    kv("pr", pr["url"])
+    kv("commit", pr["head_sha"][:10])
+    if posted:
+        table("already_posted", [{"id": x, "review": known[x]["posted"]} for x in posted], ["id", "review"])
+    if not items:
+        help_block([run(f"pr {s.sid} post {' '.join(posted)} --again") + " to post them a second time"])
+        return 0
+    payload, placed = ghpr.review_payload(pr, items, a.event)
+    table("items", placed, ["id", "where", "title"])
+    if a.dry_run:
+        kv("dry_run", f"nothing posted: {len(payload['comments'])} inline comment(s), {len(items) - len(payload['comments'])} in the review body")
+        help_block([run(f"pr {s.sid} post {' '.join(i['id'] for i in items)}" + (f" --event {a.event}" if a.event != "COMMENT" else "")) + " to post this review"])
+        return 0
+    url = ghpr.post(pr, payload)
+    for i in items:
+        s.backlog_update(i["id"], posted=url)
+    s.backlog_status([i["id"] for i in items], "done", by=a.by or "main", note=f"posted to the PR review {url}")
+    kv("review", url)
+    help_block([run(f"reload {s.sid}") + " is not needed: the code did not change",
+                "Tell the user the review is posted, with its link"])
+    return 0
 
 
 def cmd_detach(a) -> int:
@@ -692,6 +796,8 @@ def cmd_status(a) -> int:
     kv("session", s.sid)
     kv("status", m.get("status"))
     kv("title", m.get("title"))
+    if m.get("pr"):
+        kv("pr", f"{m['pr']['url']} (head {m['pr']['head_sha'][:10]}, worktree {tilde(Path(m['pr']['worktree']))})")
     kv("reviewer", f"{p['state']} {p.get('model') or '-'}/{p.get('effort') or '-'}" + (f" (exited: {p['reason']})" if p.get("reason") else ""))
     kv("wanted_tier", f"{w.get('model', '-')}/{w.get('effort', '-')}")
     kv("unanswered", len(s.unanswered()))
@@ -729,8 +835,7 @@ def cmd_reload(a) -> int:
         fields["page"] = str(Path(a.page).resolve())
     m = s.manifest()
     if m.get("source") == "git":  # opened without implementation-summary: recompute the diffs ourselves
-        import gitdiff
-        n = len(gitdiff.write(Path(m["repo"]), s.dir, m.get("base") or "HEAD", m.get("paths") or None)["files"])
+        n = gitdiff_write(s, Path(m["repo"]), m.get("base") or "HEAD", m.get("paths") or None, m.get("base_label"))
         kv("diffs", f"recomputed from git ({n} files)")
     s.update_meta(**fields)
     kv("reloaded", s.sid)
@@ -862,7 +967,7 @@ def cmd_watch(a) -> int:
         s.mark_delivered(seq, "watch")
     return_code = cmd_handoff(a)
     if event == "EXECUTE":
-        help_block(["Implement exactly the execute_requested items; done <id> --note after each",
+        help_block([pr_choice(s, s.execute_requested()) or "Implement exactly the execute_requested items; done <id> --note after each",
                     run(f"reload {s.sid}") + " (or rebuild with implementation-summary), then " + watch_hint(s.sid)])
     elif event.startswith("REVIEWER_EXITED"):
         help_block([run(f"reviewer {s.sid} start --model <model> --effort <effort>") + " if the user is still reviewing (it resumes the conversation unless the desk was upgraded)",
@@ -916,10 +1021,14 @@ def delivery_text(s: store.Session, events: list[dict], via: str, to: str | None
                 f"do not restart the reviewer.")
     ids = s.execute_requested()
     items = {i["id"]: i for i in s.handoff()}
-    lines = [f"Review Desk {s.sid} ({title}): the user pressed Execute for {' '.join(ids)}. Run `{BIN} backlog {s.sid} ack {' '.join(ids)}`, "
-             f"implement exactly these items now (finish or park your current step first), then run "
-             f"`{BIN} backlog {s.sid} done <id> --note \"<what changed, path:line>\"` for each (or `reopen <id> --note \"<what remains>\"` "
-             f"if one is only partly done), rebuild the summary (implementation-summary, Backlog follow-up form) and `{BIN} reload {s.sid}`."]
+    if choice := pr_choice(s, ids):
+        lines = [f"Review Desk {s.sid} ({title}): the user pressed Execute for {' '.join(ids)}. Run `{BIN} backlog {s.sid} ack {' '.join(ids)}` "
+                 f"(finish or park your current step first). {choice}"]
+    else:
+        lines = [f"Review Desk {s.sid} ({title}): the user pressed Execute for {' '.join(ids)}. Run `{BIN} backlog {s.sid} ack {' '.join(ids)}`, "
+                 f"implement exactly these items now (finish or park your current step first), then run "
+                 f"`{BIN} backlog {s.sid} done <id> --note \"<what changed, path:line>\"` for each (or `reopen <id> --note \"<what remains>\"` "
+                 f"if one is only partly done), rebuild the summary (implementation-summary, Backlog follow-up form) and `{BIN} reload {s.sid}`."]
     for i in (items[x] for x in ids if x in items):
         anchor = f" @ {i['anchor']}" if i.get("anchor") else ""
         lines.append(f"- {i['id']} [{i.get('kind') or 'fix'}] {i['title']}{anchor}")
@@ -1123,7 +1232,8 @@ def build_parser() -> Parser:
 
     p = cmd("open", cmd_open, "Create or reuse a session and open the desk. Example: open --title 'Fix ingest' --repo .", sid=False)
     p.add_argument("--dir", help="session folder (implementation-summary: the <stem>.review folder build_page printed)")
-    p.add_argument("--title", default="Review")
+    p.add_argument("--title")
+    p.add_argument("--pr", help="a GitHub pull request to review: its link, owner/repo#N, or a number in --repo")
     p.add_argument("--page", help="HTML page for the Story tab")
     p.add_argument("--summary", help="terminal summary Markdown, folded into context.md")
     p.add_argument("--notes", help="session-only notes for the reviewer, folded into context.md")
@@ -1189,6 +1299,14 @@ def build_parser() -> Parser:
     p.add_argument("--all", action="store_true", help="list: include done and dismissed")
     p.add_argument("--full", action="store_true", help="list: every field, untruncated")
     p.add_argument("--fields", help=f"list: comma-separated subset of {','.join(BACKLOG_FIELDS)}")
+
+    p = cmd("pr", cmd_pr, "Post backlog items to the session's pull request as one GitHub review: inline where the anchor is in the PR's diff. Example: pr d9534008 post B1 B3 --dry-run")
+    p.add_argument("action", choices=["post"])
+    p.add_argument("ids", nargs="+")
+    p.add_argument("--event", default="COMMENT", choices=["COMMENT", "REQUEST_CHANGES"])
+    p.add_argument("--dry-run", action="store_true", help="show where each item would land; post nothing")
+    p.add_argument("--again", action="store_true", help="post items that were posted before")
+    p.add_argument("--by", default=None)
 
     p = cmd("detach", cmd_detach, "End a reviewer run before its final message. Example: detach d9534008 --reason handoff")
     p.add_argument("--reason", required=True, choices=["handoff", "execute", "idle", "end"])

@@ -10,7 +10,11 @@ description: >-
   editor tabs that the agents and the user open and close. Used by
   /implementation-summary after every change; also use it directly when the user wants to
   "review the changes with me", "open the review desk", "let me ask questions about this diff",
-  or "resume the review". Prefer it over Lavish for reviewing code changes.
+  or "resume the review". It also opens a GitHub pull request from its link
+  (github.com/<owner>/<repo>/pull/<n>, owner/repo#n): use it whenever the user hands over a PR link and
+  wants to read through, question or comment on that PR themselves, and Execute can then post the
+  backlog to the PR as review comments. Prefer it over Lavish for reviewing code changes; an
+  unattended "review this PR and comment" with no desk is /code-review instead.
 ---
 
 # Review Desk
@@ -46,6 +50,33 @@ review-desk-axi add <sid> src/x.py:40-72 tests/test_x.py --note "start here"   #
 
 `open` prints the session id, the URL (it opens the browser once) and the last model/effort the user chose.
 `add` is how you put files in front of the user: each ref appears under "pinned by agent" and opens as a tab; `--focus` jumps to it.
+
+## Review a GitHub pull request
+
+When the user gives a PR link, open the desk on the PR instead of the working tree, from the directory you are in:
+
+```bash
+review-desk-axi open --pr https://github.com/<owner>/<repo>/pull/<n>   # or <owner>/<repo>#<n>, or <n> for this repo's PR
+```
+
+- **Code:** the PR head is fetched (`refs/pull/<n>/head`, so fork PRs work) into this repository when one of its remotes is the PR's repository, otherwise into a blobless clone cached under `~/.review-desk/clones/`.
+  It is checked out detached in its own worktree, `~/.review-desk/worktrees/<owner>-<repo>-pr<n>`, which becomes the session's repo.
+  The user's checkout, branch and uncommitted work are never touched.
+- **Diff:** head against the merge-base with the PR's base commit (`baseRefOid`), which is what GitHub shows, for open and merged PRs alike.
+- **Context:** the description, comments, reviews and inline review comments go into the reviewer's context, and open as the "PR #n" page tab, rendered by GitHub's Markdown API and sandboxed like every page.
+- **Reopen:** the same link reuses the session and moves the worktree to the latest push, unless the worktree holds local work, which is kept (`worktree: kept at ...`).
+- `gh` must be installed and logged in (`gh auth status`); the CLI says so when it is not.
+
+Pin the 1-3 places worth reading first, ask for the reviewer as below, and end with the URL as usual.
+
+**Execute on a PR desk.** The handoff, `watch` and the hooks all say the desk reviews a PR.
+Before acting on the executed items, ask the user with AskUserQuestion: post them to the PR, or implement them.
+- **Post:** `review-desk-axi pr <sid> post <ids> --dry-run` shows where each item lands, then run it without `--dry-run`.
+  It posts one GitHub review (`--event REQUEST_CHANGES` when the user asks for that).
+  An item becomes an inline comment when its anchor falls inside the PR's diff, otherwise a section of the review body.
+  The items close as `done` with the review's link, and a retry never posts twice (`--again` to repost).
+- **Implement:** edit the worktree named in the handoff, close each item with `done` as usual, and `review-desk-axi reload <sid>`.
+  The worktree is detached at the PR head; commit or push to the PR branch only when the user says so.
 
 ## Show pages
 
@@ -152,8 +183,9 @@ Ask the model/effort question in plain text where AskUserQuestion does not exist
 - `scripts/server.py` - loopback server for the editor (`127.0.0.1:4388`, `REVIEW_DESK_PORT`); token-gated, refuses cross-origin POSTs, exits after 30 idle minutes.
   Pages are served from `/s/<sid>/view/<key>/<page id>/<file>` with a separate read-only key.
 - `scripts/gitdiff.py` - review data from plain `git diff` when no `manifest.json` exists.
+- `scripts/ghpr.py` - pull requests: link parsing, `gh` metadata and discussion, the PR worktree, the PR page, and `pr post` reviews.
 - `scripts/search.py` - the Cmd+Shift+F engine: ripgrep (or git grep) runs, biggrep's path filter and previews, streamed records.
 - `scripts/install_agents.py` - writes the reviewer agents from `agents/reviewer.md.tmpl`; rerun after editing the template (`--check` reports drift).
 - `assets/desk.{html,css,js}` - the editor template; no build step.
 - `evals/` - eight task evals for both roles plus trigger queries, with a harness that seeds sessions, plays the user and grades from the session files (see `evals/README.md`).
-- `tests/` - `python3 -m unittest discover -s tests` from this directory: real server, real CLI, AXI output contract, kill -9 durability, token and origin checks.
+- `tests/` - `python3 -m unittest discover -s tests` from this directory: real server, real CLI, AXI output contract, kill -9 durability, token and origin checks, and pull requests against a local "GitHub" with a fake `gh` (`tests/fake_gh.py`).

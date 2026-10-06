@@ -150,6 +150,18 @@ review-desk-axi watch <sid>      # blocks until Execute, End, or the reviewer ex
 `open` prints the session id and URL and opens the browser once.
 Without a manifest from `/implementation-summary`, the desk computes the change from `git diff` against `HEAD` (or `--base`, scoped with `--paths`), including untracked files.
 
+To review a GitHub pull request, pass its link (or `owner/repo#n`):
+
+```bash
+review-desk-axi open --pr https://github.com/acme/widgets/pull/482
+review-desk-axi pr <sid> post B1 B3 --dry-run   # after Execute: where each item would land as a review comment
+```
+
+The PR head is checked out in its own worktree under `~/.review-desk/worktrees/`, so your checkout is never touched, and the diff matches GitHub's (head against the merge-base with the PR's base).
+The description and discussion open as a "PR" tab and go into the reviewer's context.
+On Execute, the agent asks whether to post the items as one GitHub review or implement them in the PR worktree.
+It needs the GitHub CLI, logged in (`gh auth status`).
+
 ## The editor
 
 ### Changed files, diffs and tabs
@@ -302,6 +314,8 @@ Every command except `open` and `url` works with the server down, because disk i
 | Command | Does |
 |---|---|
 | `open --title T [--dir D] [--page P] [--summary S] [--notes N] [--repo R] [--base B] [--paths ...]` | create or reuse a session and open the desk |
+| `open --pr <link\|owner/repo#n\|n> [--title T]` | review a GitHub pull request (reopening refreshes it) |
+| `pr <sid> post <ids> [--dry-run] [--event COMMENT\|REQUEST_CHANGES] [--again]` | post backlog items to the PR as one review |
 | `add <sid> <path[:a-b]>... [--note N] [--focus]` | pin files or ranges into the editor |
 | `reviewer <sid> start\|stop\|status [--model M --effort E]` | run the reviewer host |
 | `watch <sid>` | block until Execute, End or the reviewer exits (run it in the background) |

@@ -56,7 +56,7 @@ def untracked_lines(path: Path) -> tuple[list[str], list[str], bool]:
     return data.decode("utf-8", errors="replace").splitlines(), [], False
 
 
-def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = None) -> dict:
+def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = None, label: str | None = None) -> dict:
     repo = Path(git(repo, "rev-parse", "--show-toplevel").strip())
     scope = ["--", *paths] if paths else []
     files = []
@@ -70,7 +70,7 @@ def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = N
         files.append(("N", path, None))
     for stale in (out / "diffs").glob("*.json"):
         stale.unlink()
-    manifest = {"repo": str(repo), "link_root": str(repo), "base_label": base, "source": "git", "base": base,
+    manifest = {"repo": str(repo), "link_root": str(repo), "base_label": label or base, "source": "git", "base": base,
                 "paths": paths or [], "files": []}
     for i, (st, path, old) in enumerate(files, 1):
         notes, binary = [], False
