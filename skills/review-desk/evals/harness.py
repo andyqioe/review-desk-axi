@@ -398,6 +398,19 @@ def check_one(c: dict, run: Path, s) -> tuple[bool, str]:
         ok = len(mine) == c["count"] and all((i.get("anchor") or "").startswith(c.get("anchor_prefix", ""))
                                              and re.search(c.get("regex", ""), f"{i['title']} {i.get('detail', '')}") for i in mine)
         return ok, str([(i["id"], i.get("anchor"), i["title"]) for i in mine])
+    if fn == "details_structured":
+        # Every item the reviewer logged has the five bullets in order, each with text, and cites code as path:line.
+        labels = ["Context", "Issue", "Suggested fix", "Reasoning", "Tests"]
+        mine = [i for i in items(s).values() if i.get("by") == "reviewer"]
+        bad = []
+        for i in mine:
+            d = i.get("detail") or ""
+            pos = [re.search(rf"(?m)^- \*\*{re.escape(l)}:?\*\*:?\s*\S", d) for l in labels]
+            if not all(pos) or [m.start() for m in pos] != sorted(m.start() for m in pos):
+                bad.append(f"{i['id']}: sections {[l for l, m in zip(labels, pos) if m]}")
+            elif not LINE_REF.search(d):
+                bad.append(f"{i['id']}: no path:line")
+        return bool(mine) and not bad, "; ".join(bad) or f"{len(mine)} structured"
     if fn == "no_item_matching":
         hit = [i["id"] for i in items(s).values() if re.search(c["regex"], f"{i['title']} {i.get('detail', '')}")]
         return not hit, f"matching items: {hit}"
