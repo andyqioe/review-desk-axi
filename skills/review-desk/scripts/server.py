@@ -457,10 +457,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"seq": e["seq"], "item": item["id"]})
         if rest == "execute":
             ids = [str(i) for i in body.get("ids") or []]
-            open_ids = [i["id"] for i in s.backlog() if i["status"] in store.OPEN_STATUSES]
-            ids = [i for i in ids if i in open_ids] if ids else open_ids
+            status = {i["id"]: i["status"] for i in s.backlog()}
+            # A ticked item the main agent accepted but never finished (acked) can be executed again: it goes
+            # back to handed-off so the Execute is pending and delivered. "Execute all open" leaves acked work alone.
+            ids = [i for i in ids if status.get(i) in (*store.OPEN_STATUSES, "acked")] if ids \
+                else [i for i, st in status.items() if st in store.OPEN_STATUSES]
             if not ids:
                 return self.fail(400, "nothing to execute")
+            again = [i for i in ids if status[i] == "acked"]
+            if again:
+                s.backlog_status(again, "handed-off", by="user", note="executed again from the desk")
             e = s.post("execute", "user", ids=ids)
             return self.json({"seq": e["seq"], "ids": ids})
         if rest == "backlog":

@@ -270,6 +270,16 @@ class Session:
                     append_jsonl(self.backlog_path, {"op": "status", "id": i["id"], "status": "handed-off", "by": "handoff", "at": now()})
         return [self.item(i["id"]) for i in items]
 
+    def unfinished(self) -> list[dict]:
+        """Items the main agent accepted (acked) but has not closed with done, dismiss or reopen. Each carries
+        `acked_at`, so a reminder can fire once per acceptance instead of once per item forever."""
+        out = []
+        for i in self.backlog():
+            if i["status"] == "acked":
+                at = next((h.get("at") for h in reversed(i.get("history", [])) if h["status"] == "acked"), None)
+                out.append(i | {"acked_at": at})
+        return out
+
     def execute_requested(self) -> list[str]:
         """Item ids the user asked to execute that the main agent has not accepted yet."""
         status = {i["id"]: i["status"] for i in self.backlog()}

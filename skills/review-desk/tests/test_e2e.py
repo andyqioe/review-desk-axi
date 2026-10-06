@@ -491,6 +491,57 @@ class DeliveryTest(Desk):
             self.assertEqual(self.rd_full("hook", event, input="not json")[0], 0)
 
 
+class AckLifecycleTest(Desk):
+    """Ack means "accepted, implementing now". Items the user did not execute stay executable; accepted work the
+    agent never closes is listed until it is (Stop once per acceptance, the prompt hook, status, the home view)."""
+
+    def hook(self, event, session="agent-1", **data):
+        out = self.rd("hook", event, input=json.dumps({"session_id": session, "cwd": str(self.repo), **data}))
+        return json.loads(out) if out.strip() and out.lstrip().startswith("{") else (out or None)
+
+    def status_of(self, iid):
+        import store
+        return next(i["status"] for i in store.open_session(self.sid).backlog() if i["id"] == iid)
+
+    def test_only_executed_items_are_acked_and_unfinished_work_is_listed(self):
+        self.hook("tool", tool_name="Bash", tool_input={"command": f"review-desk-axi add {self.sid} a.py:1"}, tool_response={"stdout": ""})
+        for t in ("fix one", "fix two", "fix three"):
+            self.rd("backlog", self.sid, "add", "--title", t, "--anchor", "a.py:1", "--from", "1")
+        # the user executes B1 only: the help acks B1 and leaves B2 and B3 for the user
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B1"]})[0], 200)
+        handoff = self.rd("handoff", self.sid)
+        self.assertIn(f"backlog {self.sid} ack B1` to accept", handoff)
+        self.assertIn("Leave B2 B3 open", handoff)
+        self.rd("backlog", self.sid, "ack", "B1")
+        self.rd("backlog", self.sid, "done", "B1", "--note", "fixed at a.py:1")
+        # later the user executes B2: it is delivered, with the ack step
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B2"]})[0], 200)
+        ctx = self.hook("tool", tool_name="Read", tool_input={"file_path": "/x"})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(f"backlog {self.sid} ack B2", ctx)
+        # accepted and never closed: Stop reminds once per acceptance, then lets the agent stop
+        self.rd("backlog", self.sid, "ack", "B2")
+        stop = self.hook("stop")
+        self.assertEqual(stop["decision"], "block")
+        self.assertIn("B2 (fix two) but never closed it", stop["reason"])
+        self.assertIsNone(self.hook("stop"), "once per acceptance")
+        self.assertIsNone(self.hook("stop", stop_hook_active=True))
+        # a fresh session (after a context reset) and status both list it
+        self.assertIn("unfinished[1]", self.hook("prompt", session="agent-2"))
+        self.assertIsNone(self.hook("prompt", session="agent-2"), "once per session")
+        self.assertIn("B2 accepted, not done", self.rd("status", self.sid))
+        # partly done goes back to the user, and leaves the unfinished list
+        self.rd("backlog", self.sid, "reopen", "B2", "--note", "the test is still missing")
+        self.assertEqual(self.status_of("B2"), "open")
+        self.assertNotIn("accepted, not done", self.rd("status", self.sid))
+        # an item acked without an Execute (the old help) can still be executed from the desk
+        self.rd("backlog", self.sid, "ack", "B3")
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": []})[1]["ids"], ["B2"], "Execute all leaves acked work alone")
+        self.assertEqual(self.http("POST", f"/api/{self.sid}/execute", {"ids": ["B3"]})[0], 200)
+        self.assertEqual(self.status_of("B3"), "handed-off")
+        import store
+        self.assertIn("B3", store.open_session(self.sid).execute_requested())
+
+
 class StructuredDetailTest(Desk):
     """A backlog detail is multi-line Markdown (Context, Issue, Suggested fix, Reasoning, Tests): it goes in on
     stdin untouched by the shell, and reaches the main agent whole, in handoff and in the Execute delivery."""

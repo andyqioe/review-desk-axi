@@ -879,7 +879,8 @@ function renderBacklog() {
   const sig = JSON.stringify(items.map((i) => [i.id, i.status, i.title, i.detail, i.note])) + [...S.picked].join();
   if (sig === S.backlogSig) return;
   S.backlogSig = sig;
-  const openish = (i) => ["open", "handed-off"].includes(i.status);
+  // acked = accepted by the main agent but not finished: still selectable, so the user can execute it again or dismiss it
+  const openish = (i) => ["open", "handed-off", "acked"].includes(i.status);
   S.picked.forEach((id) => { if (!items.some((i) => i.id === id && openish(i))) S.picked.delete(id); });
   $("#items").innerHTML = items.length ? items.map((i) => {
     const patch = i.patch ? `<pre class="patch">${i.patch.replace(/\n$/, "").split("\n").map((l) => `<span class="${l.startsWith("+") && !l.startsWith("+++") ? "a" : l.startsWith("-") && !l.startsWith("---") ? "d" : l.startsWith("@@") ? "h" : ""}">${esc(l)}</span>`).join("\n")}</pre>` : "";
@@ -896,7 +897,7 @@ function renderBacklog() {
       `${i.note ? `<div class="detail note">${md(`main: ${i.note}`)}</div>` : ""}<div class="acts">${acts}</div></div></li>`;
   }).join("") : '<li class="empty">Nothing yet. Flags, suggested edits and issues the reviewer finds land here, and reach the main agent on Execute or when the reviewer exits.</li>';
   syncExecSel();
-  $("#exec-all").disabled = !items.some(openish);
+  $("#exec-all").disabled = !items.some((i) => ["open", "handed-off"].includes(i.status));  // the server skips acked work here
 }
 
 // "Execute selected" stays clickable while nothing is ticked: a disabled button swallows the click without a
