@@ -8,6 +8,8 @@ Main agent
   open --pr <github PR link | owner/repo#N | N>    review a pull request (its head in a worktree of its own)
   add <sid> <path[:a-b]>... [--note N] [--focus]   pin files or ranges into the editor
   page <sid> open <file.html> [--title T] [--background] | close <P#|path> | list
+  story <sid> set <sha|uncommitted> --page P [--summary S] | remove <id> | list
+                                                   one commit's own summary in the Story tab
                                                    show an HTML page as a read-only editor tab
   run <sid> -- <command...>                        run a page generator; writes confined to pages/
   handoff <sid>                                    backlog the main agent has not accepted yet
@@ -193,18 +195,38 @@ def file_map(manifest: dict) -> list[str]:
     return out
 
 
-def build_context(s: store.Session, summary: Path | None, notes: Path | None) -> None:
+def build_context(s: store.Session, summary: Path | None = None, notes: Path | None = None) -> None:
+    """context.md, the reviewer's briefing. The summary and notes are kept in the session folder, so adding a
+    commit's story later rewrites the briefing without them being passed again."""
+    for src, name in ((summary, "summary.md"), (notes, "notes.md")):
+        if src and src.is_file():
+            shutil.copyfile(src, s.dir / name)
     m = s.meta()
     parts = [f"# Review context: {m.get('title', '')}", "", f"repo: {m.get('repo')}   page: {m.get('page') or '-'}", ""]
-    pr_md = s.dir / "pr.md"
+    pr_md, summary_md, notes_md = s.dir / "pr.md", s.dir / "summary.md", s.dir / "notes.md"
     if m.get("pr") and pr_md.is_file():
         parts += [pr_md.read_text(encoding="utf-8").strip(), ""]
-    if summary and summary.is_file():
-        parts += ["## Implementation summary (what the user is reviewing)", "", strip_inventory(summary.read_text(encoding="utf-8")).strip(), ""]
-    if notes and notes.is_file():
-        parts += ["## Session notes from the implementing agent", "", notes.read_text(encoding="utf-8").strip(), ""]
+    stories = m.get("stories") or {}
+    if summary_md.is_file():
+        what = "overview of the whole review" if stories else "what the user is reviewing"
+        parts += [f"## Implementation summary ({what})", "", strip_inventory(summary_md.read_text(encoding="utf-8")).strip(), ""]
+    if stories:
+        parts += ["## Per-commit summaries", "",
+                  "Each commit has its own summary, shown in the Story tab when the user picks that commit.", ""]
+        for sid_, st in sorted(stories.items(), key=lambda kv_: story_order(s, kv_[0])):
+            parts += [f"### {st.get('label') or sid_}", ""]
+            md = s.dir / "stories" / f"{sid_}.md"
+            parts += [strip_inventory(md.read_text(encoding="utf-8")).strip() if md.is_file() else "(page only, no summary text)", ""]
+    if notes_md.is_file():
+        parts += ["## Session notes from the implementing agent", "", notes_md.read_text(encoding="utf-8").strip(), ""]
     parts += ["## File map", "", *file_map(s.manifest()), ""]
     s.context_path.write_text("\n".join(parts), encoding="utf-8")
+
+
+def story_order(s: store.Session, sid_: str) -> int:
+    """Stories follow the commit picker: oldest commit first, the uncommitted rest last."""
+    ids = [e["id"] for e in (store.read_json(s.dir / "commits" / "index.json") or {}).get("entries", [])]
+    return ids.index(sid_) if sid_ in ids else len(ids)
 
 
 # -------------------------------------------------------------- home/inbox
@@ -399,7 +421,9 @@ def cmd_open(a) -> int:
             sha = gitdiff.rev(repo, base)  # pinned: committing more work appends commits, it never moves the base
             if sha:
                 s.update_meta(commit_base=sha)
-            gitdiff_write(s, repo, sha or base, a.paths, a.base or (f"{sha[:10]} (HEAD at open)" if sha else None))
+            named = a.base and not re.fullmatch(r"[0-9a-f]{7,40}", a.base)  # "main" reads well; a raw sha is shortened
+            label = a.base if named else (f"{sha[:10]}{'' if a.base else ' (HEAD at open)'}" if sha else a.base)
+            gitdiff_write(s, repo, sha or base, a.paths, label)
     commits = sync_commits(s)
     build_context(s, Path(a.summary) if a.summary else None, Path(a.notes) if a.notes else None)
     h = ensure_server()
@@ -423,7 +447,7 @@ def cmd_open(a) -> int:
     kv("commits", commits_line(commits))
     kv("context", f"{tilde(s.context_path)} ({len(s.context_path.read_text().splitlines())} lines)")
     kv("last_tier", f"{p.get('model', 'haiku')}/{p.get('effort', 'low')}")
-    help_block([run(f'add {s.sid} <path:a-b> --note "<why read this first>"') + " to pin the 1-3 code moments",
+    help_block([run(f'add {s.sid} <path:a-b> --note "<why read this first>"') + " to pin the code moments (up to 10)",
                 f"Ask the user for model and effort (last: {p.get('model', 'haiku')}/{p.get('effort', 'low')}), then "
                 + run("prefs --model <model> --effort <effort>"),
                 spawn_hint(s.sid),
@@ -453,6 +477,65 @@ def cmd_add(a) -> int:
     table("pinned", rows, ["ref", "status", "note"])
     help_block([run(f"url {s.sid}") + " to show the desk again"])
     return 1 if all(r["status"].startswith("skipped") for r in rows) else 0
+
+
+STORY_FIELDS = ["id", "commit", "page", "summary"]
+
+
+def story_rows(s: store.Session) -> list[dict]:
+    stories = s.meta().get("stories") or {}
+    return [{"id": k[:10] if k != "uncommitted" else k, "commit": st.get("label", ""), "page": tilde(st["page"]),
+             "summary": "yes" if (s.dir / "stories" / f"{k}.md").is_file() else "no"}
+            for k, st in sorted(stories.items(), key=lambda kv_: story_order(s, kv_[0]))]
+
+
+def story_target(s: store.Session, ref: str) -> tuple[str, str]:
+    """(picker id, label) for a commit the desk lists (a sha or a prefix of one), or "uncommitted"."""
+    index = sync_commits(s) or {}
+    if ref == "uncommitted":
+        if not index.get("uncommitted"):
+            raise DeskError("this desk has no uncommitted work to attach a story to", [run(f"reload {s.sid}") + " after changing files"])
+        return ref, "uncommitted (working tree vs HEAD)"
+    hits = [e for e in index.get("entries", []) if re.fullmatch(r"[0-9a-f]{4,40}", ref) and e["id"].startswith(ref)]
+    if len(hits) != 1:
+        listed = " ".join(e["short"] for e in index.get("entries", [])) or "none"
+        why = "matches several commits" if hits else "is not a commit this desk lists"
+        raise DeskError(f"{ref} {why} (listed: {listed})", [run(f"reload {s.sid}") + " if you committed after opening the desk"])
+    return hits[0]["id"], f"{hits[0]['short']} {hits[0]['subject']}"
+
+
+def cmd_story(a) -> int:
+    """A commit's own summary page (and its terminal summary for the reviewer), shown in the Story tab when
+    the user picks that commit; "All changes" and commits without one show the session's page."""
+    s = session(a.sid)
+    if a.action == "set":
+        if not a.target or not a.page:
+            raise DeskError("story set needs a commit and --page", [run(f"story {s.sid} set <sha|uncommitted> --page <commit.html> --summary <commit.md>")])
+        page = Path(a.page).expanduser().resolve()
+        if page.suffix.lower() not in (".html", ".htm") or not page.is_file():
+            raise DeskError(f"not an HTML file: {a.page}", [run(f"story {s.sid} list")])
+        key, label = story_target(s, a.target)
+        (s.dir / "stories").mkdir(exist_ok=True)
+        md = s.dir / "stories" / f"{key}.md"
+        if a.summary:
+            shutil.copyfile(Path(a.summary).expanduser(), md)
+        stories = dict(s.meta().get("stories") or {})
+        stories[key] = {"page": str(page), "label": label}
+        s.update_meta(stories=stories)
+    elif a.action == "remove":
+        stories = dict(s.meta().get("stories") or {})
+        key = next((k for k in stories if a.target and (k == a.target or k.startswith(a.target))), None)
+        if key is None:
+            raise DeskError(f"no story for {a.target}", [run(f"story {s.sid} list")])
+        del stories[key]
+        (s.dir / "stories" / f"{key}.md").unlink(missing_ok=True)
+        s.update_meta(stories=stories)
+    if a.action != "list":
+        build_context(s)
+    table("stories", story_rows(s), STORY_FIELDS)
+    help_block([run(f"story {s.sid} set <sha|uncommitted> --page <commit.html> --summary <commit.md>") + " for each commit",
+                "The Story tab follows the commit picker; All changes shows the overview page"])
+    return 0
 
 
 PAGE_FIELDS = ["id", "status", "title", "path", "by"]
@@ -849,6 +932,8 @@ def cmd_status(a) -> int:
         kv("pr", f"{m['pr']['url']} (head {m['pr']['head_sha'][:10]}, worktree {tilde(Path(m['pr']['worktree']))})")
     if (s.dir / "commits" / "index.json").exists():
         kv("commits", commits_line(store.read_json(s.dir / "commits" / "index.json")))
+    if s.meta().get("stories"):
+        kv("stories", f"{len(s.meta()['stories'])} commit stories (story {s.sid} list)")
     kv("reviewer", f"{p['state']} {p.get('model') or '-'}/{p.get('effort') or '-'}" + (f" (exited: {p['reason']})" if p.get("reason") else ""))
     kv("wanted_tier", f"{w.get('model', '-')}/{w.get('effort', '-')}")
     kv("unanswered", len(s.unanswered()))
@@ -1194,6 +1279,23 @@ def cmd_hook(a) -> int:
 
 
 # ------------------------------------------------------------------ setup
+def summary_hooks() -> list[tuple[str, str, str | None]]:
+    """implementation-summary's activation hooks, when that skill is installed: they make every turn that
+    changed files end with a summary, and name the base the work began at so committed work is included."""
+    installed = Path("~/.claude/skills/implementation-summary").expanduser()
+    beside = SKILL.parent / "implementation-summary"
+    if installed.is_dir():
+        script = "~/.claude/skills/implementation-summary/hooks/activate.py"
+    elif (beside / "hooks" / "activate.py").is_file():
+        script = str(beside / "hooks" / "activate.py")
+    else:
+        return []
+    return [("UserPromptSubmit", f"python3 {script} prompt", None),
+            ("PostToolUse", f"python3 {script} post-edit", "Edit|Write|MultiEdit|NotebookEdit"),
+            ("PostToolUse", f"python3 {script} post-bash", "Bash"),
+            ("Stop", f"python3 {script} stop", None)]
+
+
 def setup_hooks(settings: Path) -> list[dict]:
     d = json.loads(settings.read_text()) if settings.exists() else {}
     before = json.dumps(d, sort_keys=True)
@@ -1201,8 +1303,10 @@ def setup_hooks(settings: Path) -> list[dict]:
     hooks = d.setdefault("hooks", {})
     legacy = ("review-desk/hooks/inbox.py",)
     # tool and stop deliver Execute/End to the agent that owns a desk while it works on something else
-    for event, cmd, matcher in (("SessionStart", f"{BIN} hook session", True), ("UserPromptSubmit", f"{BIN} hook prompt", False),
-                                ("PostToolUse", f"{BIN} hook tool", True), ("Stop", f"{BIN} hook stop", False)):
+    wanted = [("SessionStart", f"{BIN} hook session", ""), ("UserPromptSubmit", f"{BIN} hook prompt", None),
+              ("PostToolUse", f"{BIN} hook tool", ""), ("Stop", f"{BIN} hook stop", None)]
+    wanted += summary_hooks()
+    for event, cmd, matcher in wanted:
         groups = hooks.setdefault(event, [])
         for g in groups:
             kept = [h for h in g.get("hooks", []) if not any(x in h.get("command", "") for x in legacy)]
@@ -1213,7 +1317,7 @@ def setup_hooks(settings: Path) -> list[dict]:
         if any(h.get("command") == cmd for g in groups for h in g.get("hooks", [])):
             rows.append({"what": f"{event}: {cmd}", "status": "present"})
         else:
-            groups.append(({"matcher": ""} if matcher else {}) | {"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+            groups.append(({} if matcher is None else {"matcher": matcher}) | {"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
             rows.append({"what": f"{event}: {cmd}", "status": "added"})
     allow = d.setdefault("permissions", {}).setdefault("allow", [])
     for old in [r for r in allow if "review-desk/bin/review-desk:" in r]:
@@ -1314,6 +1418,12 @@ def build_parser() -> Parser:
     p.add_argument("target", nargs="?", help="open: an .html file or a page id; close: a page id or path")
     p.add_argument("--title", help="tab title (default: the file name)")
     p.add_argument("--background", action="store_true", help="open the tab without switching to it")
+
+    p = cmd("story", cmd_story, "Give a commit its own summary in the Story tab, remove it, or list them. Example: story d9534008 set a1b2c3d --page ~/x/commit-a1b2c3d.html --summary ~/x/a1b2c3d.md")
+    p.add_argument("action", choices=["set", "remove", "list"])
+    p.add_argument("target", nargs="?", help="a commit the desk lists (sha or prefix), or uncommitted")
+    p.add_argument("--page", help="set: the commit's summary page (.html)")
+    p.add_argument("--summary", help="set: the commit's terminal summary (Markdown), for the reviewer's briefing")
 
     p = cmd("run", cmd_run, "Run a page generator with writes confined to the session's pages/ folder. Example: run d9534008 -- python3 make_page.py")
     p.add_argument("argv", nargs=argparse.REMAINDER, help="-- then the command")

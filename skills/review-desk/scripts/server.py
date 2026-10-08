@@ -204,7 +204,19 @@ def state(s: store.Session) -> dict:
             "tray": s.tray(), "pages": pages, "view": f"/s/{s.sid}/view/{m['view_key']}",
             "agent": s.presence(), "unanswered": [e["seq"] for e in s.unanswered()],
             "prefs": store.prefs(), "models": store.MODELS, "efforts": store.EFFORTS, "draft": read_draft(s),
-            "delivery": s.delivery()}
+            "delivery": s.delivery(), "stories": story_state(m)}
+
+
+def story_state(m: dict) -> dict:
+    """id -> {label, mtime} of each commit's story; the desk reloads the Story tab when either changes."""
+    out = {}
+    for k, st in (m.get("stories") or {}).items():
+        try:
+            mtime = Path(st["page"]).stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        out[k] = {"label": st.get("label", ""), "mtime": mtime}
+    return out
 
 
 def read_draft(s: store.Session) -> dict | None:
@@ -313,7 +325,8 @@ class Handler(BaseHTTPRequestHandler):
                 page = page.replace("{{CONFIG}}", cfg.replace("</", "<\\/")).replace("{{TITLE}}", html.escape(s.meta().get("title", "Review")))
                 return self.send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             if rest == "story":
-                page = s.meta().get("page")
+                story = (s.meta().get("stories") or {}).get(q.get("c") or "")  # a commit's own story, else the overview
+                page = story["page"] if story and Path(story["page"]).is_file() else s.meta().get("page")
                 if not page or not Path(page).is_file():
                     what = (b"No summary page: this desk reviews a pull request, whose description and discussion are in the PR tab."
                             if s.meta().get("pr") else b"No summary page for this session.")

@@ -58,6 +58,18 @@ The base is pinned at `open` (HEAD, `--base`, the summary's base, or a PR's merg
 After you commit more work, `review-desk-axi reload <sid>` appends the new commits (`commits: ... appended <sha>`); `status` lists the count.
 An anchor ending in `@<sha>` (`src/x.py:40-42@a16f7de9c1`) is lines as of that commit, flagged in its view: read them with `git show <sha>:<path>`, and apply the intent where the code is now.
 
+Each commit can carry its own summary, so the Story tab follows the picker:
+
+```bash
+review-desk-axi story <sid> set <sha|uncommitted> --page <commit.html> --summary <commit.md>   # one per commit
+review-desk-axi story <sid> list            # which commits have a story
+review-desk-axi story <sid> remove <sha>
+```
+
+- The tab reads `Story · <short sha>` on a commit with a story, and "All changes" (or a commit without one) shows the `open --page` overview.
+- `--summary` goes into the reviewer's briefing under "Per-commit summaries", in picker order; `story set` again replaces a page, and a rebuilt page reloads by itself.
+- `/implementation-summary` sets these in per-commit mode (two or more commits, or commits plus uncommitted work).
+
 ## Review a GitHub pull request
 
 When the user gives a PR link, open the desk on the PR instead of the working tree, from the directory you are in:
@@ -74,7 +86,7 @@ review-desk-axi open --pr https://github.com/<owner>/<repo>/pull/<n>   # or <own
 - **Reopen:** the same link reuses the session and moves the worktree to the latest push, unless the worktree holds local work, which is kept (`worktree: kept at ...`).
 - `gh` must be installed and logged in (`gh auth status`); the CLI says so when it is not.
 
-Pin the 1-3 places worth reading first, ask for the reviewer as below, and end with the URL as usual.
+Pin the places worth reading first (up to 10), ask for the reviewer as below, and end with the URL as usual.
 
 **Execute on a PR desk.** The handoff, `watch` and the hooks all say the desk reviews a PR.
 Before acting on the executed items, ask the user with AskUserQuestion: post them to the PR, or implement them.
@@ -174,7 +186,7 @@ An Execute or End must reach the main agent even while it is busy with another t
 
 The desk shows where the latest Execute stands under its buttons: delivered (and how), waking the agent, queued behind a busy agent, or not delivered because no agent is listening, with the `handoff` command to paste into any agent.
 Hooks exist only in Claude Code; a desk driven from another harness (Codex) gets Execute through `watch` while that harness can be woken, otherwise the desk says nobody is listening.
-`setup hooks` installs all four hooks.
+`setup hooks` installs all four hooks, plus implementation-summary's activation hooks when that skill is installed.
 
 ## Without a reviewer
 

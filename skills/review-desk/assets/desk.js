@@ -252,12 +252,36 @@ async function setCommit(id, opts = {}) {
   if (moved) { setSel(null); closePop(); }
   renderTree();
   renderPicker();
+  if (S.state) showStory();
   if (moved && opts.why) toast(opts.why);
   if (moved && !opts.quiet && isCode(S.active)) {
     if (S.byPath.has(S.active)) S.view = "diff";
     renderCode();
   }
 }
+// ------------------------------------------------------------ commit stories
+// A commit can carry its own summary (`review-desk-axi story set`): the Story tab shows the picked commit's,
+// and the review's overview page for "All changes" or a commit without one.
+const stories = () => (S.state && S.state.stories) || {};
+const storyKey = () => (stories()[S.commit] ? S.commit : "all");
+function storyLabel() {
+  const k = S.storyKey;
+  if (!k || k === "all") return Object.keys(stories()).length && S.commit !== "all" ? "Story · all changes" : "Story";
+  return `Story · ${k === "uncommitted" ? "uncommitted" : shortOf(k)}`;
+}
+function storySig() { return JSON.stringify(stories()); }
+// force: the page itself may have changed (a reload, or a rebuilt story), so load it again
+function showStory(force) {
+  const key = storyKey(), label = storyLabel();
+  if (!force && key === S.storyKey && label === S.storyTabLabel) return;
+  if (force || key !== S.storyKey) {
+    $("#story").src = `/s/${D.sid}/story?${key === "all" ? "" : `c=${encodeURIComponent(key)}&`}t=${encodeURIComponent(D.token)}`;
+  }
+  S.storyKey = key;
+  S.storyTabLabel = storyLabel();
+  renderTabs();
+}
+
 function stepCommit(by) {
   const ids = viewIds(), i = ids.indexOf(S.commit) + by;
   if (i >= 0 && i < ids.length) setCommit(ids[i]);
@@ -395,7 +419,7 @@ function renderTabs() {
   // detached, and re-inserting it duplicated the tab. Render once the drop settles instead.
   if (S.tabDrag && S.tabDrag.moved) { S.tabDrag.stale = true; return; }
   $("#tabs").innerHTML = S.tabs.map((t) => t === "story"
-    ? `<div class="tab story-tab${S.active === t ? " active" : ""}" role="tab" tabindex="0" aria-selected="${S.active === t}" data-tab="story">Story</div>`
+    ? `<div class="tab story-tab${S.active === t ? " active" : ""}" role="tab" tabindex="0" aria-selected="${S.active === t}" data-tab="story">${esc(S.storyTabLabel || "Story")}</div>`
     : isPage(t) ? pageTab(t)
     : `<div class="tab${S.active === t ? " active" : ""}" role="tab" tabindex="0" aria-selected="${S.active === t}" data-tab="${esc(t)}" title="${esc(t)}">` +
       `<span class="name">${tabLabel(t, S.tabs)}</span><button type="button" class="close" tabindex="-1" data-close="${esc(t)}" aria-label="close ${esc(t)}">×</button></div>`).join("");
@@ -437,7 +461,7 @@ function tabOverflow() {
 
 function renderTabMenu() {
   $("#tab-menu").innerHTML = S.tabs.map((t) => `<div class="tm-item${S.active === t ? " active" : ""}" role="menuitem" tabindex="-1" data-tab="${esc(t)}">` +
-    (t === "story" ? '<span class="tm-name">Story</span>' : isPage(t)
+    (t === "story" ? `<span class="tm-name">${esc(S.storyTabLabel || "Story")}</span>` : isPage(t)
       ? `<span class="tm-name"><span class="pg-glyph" aria-hidden="true"></span>${esc(pageOf(t) ? pageName(pageOf(t)) : t)}</span><span class="tm-dir">page</span>` +
         `<button type="button" class="close" data-close="${esc(t)}" aria-label="close ${esc(t)}">×</button>`
       : `<span class="tm-name">${esc(t.split("/").pop())}</span><span class="tm-dir">${esc(t.split("/").slice(0, -1).join("/"))}</span>` +
@@ -1109,14 +1133,14 @@ async function refresh() {
       a.title = `Open the pull request on GitHub (@${pr.author}, ${pr.base_ref} ← ${pr.head_ref})`;
       meta.prepend(a, meta.textContent ? " · " : "");
     }
-    const story = $("#story");
-    if (first) story.src = `/s/${D.sid}/story?t=${encodeURIComponent(D.token)}`;
-    else if (again) {
-      story.contentWindow.location.reload();
+    S.storiesSig = storySig();  // setCommit above already showed the picked commit's story
+    if (again) {
+      showStory(true);
       if (S.active !== "story") renderCode();
       toast(added.length ? `${added.length} new commit${added.length === 1 ? "" : "s"}: ${added.map((e) => e.short).join(", ")}` : "Summary and diffs reloaded");
     }
   }
+  if (storySig() !== S.storiesSig) { S.storiesSig = storySig(); showStory(true); }  // a story set, removed or rebuilt
   S.draft = st.draft || null;
   syncPages(first);
   renderTray(); renderChat(); renderDraft(); renderPresence(); renderTier(); renderBacklog(); renderDelivery();

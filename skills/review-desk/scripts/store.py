@@ -8,7 +8,8 @@ dead server never blocks a reviewer and a killed reviewer never loses what it lo
 
   <session dir>/
     session.json   sid, title, repo, page, token, status          (atomic rewrite)
-    context.md     the reviewer's compact briefing                 (written once by `open`)
+    context.md     the reviewer's compact briefing                 (by `open`, rewritten by `story`)
+    summary.md, notes.md, stories/<id>.md   what the briefing is built from
     manifest.json  changed files + hunk map; diffs/<n>.json rows  (written by build_page --review-data)
     commits/       one change set per commit, and the uncommitted rest, for the commit picker (gitdiff.py)
     chat.jsonl     every message and control event, with a seq    (append + fsync)
@@ -180,12 +181,13 @@ class Session:
                 out.append((st.st_mtime_ns, st.st_size))
             except FileNotFoundError:
                 out.append(None)
-        page = self.meta().get("page")
-        if page:
-            try:
-                out.append(Path(page).stat().st_mtime_ns)
-            except OSError:
-                out.append(None)
+        m = self.meta()
+        for page in [m.get("page"), *[st.get("page") for st in (m.get("stories") or {}).values()]]:
+            if page:
+                try:
+                    out.append(Path(page).stat().st_mtime_ns)
+                except OSError:
+                    out.append(None)
         return tuple(out)
 
     # ------------------------------------------------------------- chat

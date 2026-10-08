@@ -414,7 +414,14 @@ class AxiContractTest(Desk):
         self.assertNotIn("removed", second)
         self.assertEqual(written, settings.read_text(), "a second setup changes nothing")
         d = json.loads(written)
-        self.assertEqual([h["command"] for g in d["hooks"]["UserPromptSubmit"] for h in g["hooks"]], ["review-desk-axi hook prompt"])
+        import review_desk
+        summary = review_desk.summary_hooks()  # implementation-summary's, when that skill is installed beside
+        self.assertEqual([h["command"] for g in d["hooks"]["UserPromptSubmit"] for h in g["hooks"]],
+                         ["review-desk-axi hook prompt", *[c for e, c, _ in summary if e == "UserPromptSubmit"]])
+        for event, cmd, matcher in summary:
+            self.assertIn(f"{event}: {cmd}\",added", first)
+            group = next(g for g in d["hooks"][event] if g["hooks"][0]["command"] == cmd)
+            self.assertEqual(group.get("matcher"), matcher)
         self.assertEqual(d["permissions"]["allow"], ["Bash(review-desk-axi:*)"])
         # the prompt hook injects undelivered items once per session, and never fails
         self.rd("backlog", self.sid, "add", "--title", "hook item")
@@ -1021,6 +1028,38 @@ class CommitPickerTest(Desk):
             self.assertIn(needle, page)
         js = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/desk.js", timeout=5).read().decode()
         for needle in ("function setCommit(", "function openRef(", "manifest?c=", "withCommit("):
+            self.assertIn(needle, js)
+
+    def test_4_each_commit_shows_its_own_story(self):
+        first, second = [e["id"] for e in self.index()["entries"]]
+        tmp = Path(self.tmp.name)
+        for name, text in (("one", "Story of the first commit"), ("rest", "Story of the uncommitted rest")):
+            (tmp / f"{name}.html").write_text(f"<!doctype html><title>{name}</title><body><p>{text}</p></body>")
+            (tmp / f"{name}.md").write_text(f"## {text}\n\nDetail for {name}.\n\n### Every change\n<details>files</details>\n")
+        out = self.rd("story", self.sid, "set", first[:7], "--page", str(tmp / "one.html"), "--summary", str(tmp / "one.md"))
+        self.assertIn(f"{first[:10]},{first[:7]} Parse rows with csv", out)
+        self.rd("story", self.sid, "set", "uncommitted", "--page", str(tmp / "rest.html"), "--summary", str(tmp / "rest.md"))
+        code, out, _ = self.rd_full("story", self.sid, "set", "0" * 7, "--page", str(tmp / "one.html"), check=False)
+        self.assertEqual(code, 1)
+        self.assertIn("is not a commit this desk lists", out)
+        page = lambda q: urllib.request.urlopen(f"http://127.0.0.1:{self.port}/s/{self.sid}/story?{q}t={self.token}", timeout=5).read().decode()
+        self.assertIn("Story of the first commit", page(f"c={first}&"))
+        self.assertIn("Story of the uncommitted rest", page("c=uncommitted&"))
+        for other in (f"c={second}&", "", "c=..%2F..%2Fx&"):  # no story of its own: the overview
+            self.assertIn("No summary page", page(other))
+        code, st = self.http("GET", f"/api/{self.sid}/state")
+        self.assertEqual(sorted(st["stories"]), sorted([first, "uncommitted"]))
+        self.assertEqual(st["stories"][first]["label"], f"{first[:7]} Parse rows with csv")
+        ctx = (self.session().dir / "context.md").read_text()
+        self.assertIn("## Per-commit summaries", ctx)
+        self.assertLess(ctx.index("Story of the first commit"), ctx.index("Story of the uncommitted rest"))
+        self.assertNotIn("<details>files</details>", ctx)  # the inventory gives way to the file map
+        self.assertIn("2 commit stories", self.rd("status", self.sid))
+        self.rd("story", self.sid, "remove", first[:7])
+        self.assertNotIn(first, self.http("GET", f"/api/{self.sid}/state")[1]["stories"])
+        self.assertNotIn("Story of the first commit", (self.session().dir / "context.md").read_text())
+        js = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/desk.js", timeout=5).read().decode()
+        for needle in ("function showStory(", "story?${key === \"all\"", "Story · "):
             self.assertIn(needle, js)
 
 

@@ -133,6 +133,8 @@ for s in review-desk implementation-summary analyze-code; do ln -s ~/review-desk
   SessionStart prints a home view of this repository's sessions;
   UserPromptSubmit injects backlog that never reached the main agent;
   PostToolUse and Stop hand an Execute or End to the agent that opened the desk, after its next tool call or before it stops.
+  When `implementation-summary` is installed beside it, `hooks` also adds its activation hooks (`hooks/activate.py`):
+  they make a turn that changed files, through any tool or a `git commit`, end with a summary, and name the base the work began at.
 
 Run `setup hooks`, `setup bin` or `setup agents` for one part.
 
@@ -195,6 +197,11 @@ A commit's diff is computed once and kept; the desk says which commits a reload 
 Lines you select or flag in a commit's view carry that commit (`src/x.py:40-42@a16f7de9c1`), so the reviewer and the main agent read the lines you saw, not the working tree's.
 A reference written against the working tree (a pin, a search hit, a summary link) switches the picker back to All changes.
 Merge commits are left out of the list, and only the newest 100 commits are listed; both stay in All changes.
+
+Each commit can have its own story.
+When `/implementation-summary` summarizes work made of several commits, it writes one independent summary per commit and attaches each with `review-desk-axi story <sid> set <sha> --page <commit.html> --summary <commit.md>`.
+The Story tab then follows the picker: it reads **Story · a1b2c3d** on a commit with a story, and All changes (or a commit without one) shows the overview.
+The reviewer's briefing lists every commit's summary in picker order.
 
 ### Select, analyze, flag, suggest
 
@@ -340,6 +347,7 @@ Every command except `open` and `url` works with the server down, because disk i
 | `backlog <sid> ack\|done\|dismiss\|reopen <ids> [--note N]` | track and close items |
 | `page <sid> open <file.html> [--title T] [--background]`, `close <id>`, `list` | HTML pages as read-only tabs |
 | `run <sid> -- <command...>` | run a page generator with writes confined to the pages folder |
+| `story <sid> set <sha\|uncommitted> --page P [--summary S]`, `remove <sha>`, `list` | one commit's own summary in the Story tab |
 | `reload <sid> [--page P]` | refresh the browser after a rebuild; recompute git diffs and append new commits to the picker |
 | `status <sid>`, `url <sid>`, `end <sid>`, `prefs [--model M --effort E]` | inspect, reopen, close, set defaults |
 | `setup [hooks\|bin\|agents\|all]` | install the hooks, the PATH link and the fallback agents |
