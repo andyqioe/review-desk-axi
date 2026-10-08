@@ -81,7 +81,7 @@ flowchart LR
   E -->|implements, marks done, reloads| B
 ```
 
-1. The main agent runs `review-desk-axi open`, pins the one to three places you should read first, and starts a reviewer at the model and effort you choose.
+1. After an implementation, the main agent asks whether you want a desk; on yes it runs `review-desk-axi open`, pins the places you should read first (up to 10), and starts a reviewer at the model and effort you choose.
 2. You read the change and talk to the reviewer.
    Every real issue becomes a backlog item (`B1`, `B2`, ...), with a file anchor and a suggested fix.
 3. When you press **Execute**, the main agent wakes up (a background `review-desk-axi watch` returns), implements exactly the items you selected, marks each one done with a note, and reloads the desk.
