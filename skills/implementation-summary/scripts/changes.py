@@ -5,7 +5,8 @@ numbered, so a `#3` printed by collect_changes.py is the hunk `data-hunks="3"` r
 Hunks are always zero-context (`git diff -U0`), so each one is exactly one changed region;
 build_page.py adds display context from the file on disk.
 
-Scope: the working tree (committed, staged, unstaged and untracked work) against a base.
+Scope: the working tree (committed, staged, unstaged and untracked work) against a base,
+or with `commit=` exactly one commit against its parent (file contents read from that commit).
 Renames are detected over the whole tree before scoping, so a scoped renamed file keeps
 its real diff. A tracked file deleted and re-created untracked elsewhere (`mv` without
 `git mv`) is paired as an untracked rename when the contents are at least 50% similar.
@@ -165,6 +166,7 @@ class ChangeSet:
     base_label: str
     files: list[FileChange]
     scope: list[str]
+    commit: str | None = None       # set when this is one commit's change set: its full sha
 
     @property
     def adds(self) -> int:
@@ -312,8 +314,8 @@ def disk_size(path: Path) -> int | None:
 
 
 # --------------------------------------------------------------- collect
-def _raw_entries(repo: Path, base: str) -> list[dict]:
-    raw = git(repo, "diff", "-z", "--raw", "-M", "--no-ext-diff", base)
+def _raw_entries(repo: Path, base: str, head: str | None = None) -> list[dict]:
+    raw = git(repo, "diff", "-z", "--raw", "-M", "--no-ext-diff", base, *([head] if head else []))
     parts = raw.split("\0")
     out, i = [], 0
     while i < len(parts):
@@ -334,15 +336,19 @@ def _raw_entries(repo: Path, base: str) -> list[dict]:
     return out
 
 
-def _tracked_change(repo: Path, base: str, e: dict) -> FileChange:
+def _tracked_change(repo: Path, base: str, e: dict, head: str | None = None) -> FileChange:
+    """One file's change from base to the working tree, or to commit `head` when given."""
     fc = FileChange(e["path"], e["status"], e["old"], e["sim"], e["old_mode"], e["new_mode"])
     paths = [e["old"], e["path"]] if e["old"] else [e["path"]]
-    patch = git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base, "--", *paths)
+    patch = git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base,
+                *([head] if head else []), "--", *paths)
     fc.hunks, fc.binary = parse_patch(patch)
     disk = repo / e["path"]
     fc.submodule = "160000" in (e["old_mode"], e["new_mode"])
     if fc.submodule:
         fc.hunks = []
+    if head:
+        return _at_commit(repo, base, head, e, fc)
     if e["new_mode"] == "120000" and disk.is_symlink():
         fc.symlink = os.readlink(disk)
     if e["old_mode"] == "120000":
@@ -356,6 +362,37 @@ def _tracked_change(repo: Path, base: str, e: dict) -> FileChange:
         fc.old_size = None if e["status"] == "A" else blob_size(repo, f"{base}:{e['old'] or e['path']}")
         fc.new_size = None if e["status"] == "D" else disk_size(disk)
     return fc
+
+
+def _at_commit(repo: Path, base: str, head: str, e: dict, fc: FileChange) -> FileChange:
+    """Fill in what the working-tree path reads from disk (lines, symlink target, size) from commit `head`."""
+    old_spec, new_spec = f"{base}:{e['old'] or e['path']}", f"{head}:{e['path']}"
+    if e["old_mode"] == "120000":
+        fc.old_symlink = blob_text(repo, old_spec) or "?"
+    if e["status"] == "D":
+        if fc.binary:
+            fc.old_size = blob_size(repo, old_spec)
+        return fc
+    if e["new_mode"] == "120000":
+        fc.symlink = blob_text(repo, new_spec)
+    elif not fc.submodule:
+        data = blob_bytes(repo, new_spec)
+        if data is not None and not is_binary_bytes(data):
+            fc.new_lines = data.decode("utf-8", errors="replace").splitlines()
+    if fc.binary:
+        fc.old_size = None if e["status"] == "A" else blob_size(repo, old_spec)
+        fc.new_size = blob_size(repo, new_spec)
+    return fc
+
+
+def blob_bytes(repo: Path, spec: str) -> bytes | None:
+    out = subprocess.run(["git", "cat-file", "blob", spec], cwd=repo, capture_output=True)
+    return out.stdout if out.returncode == 0 else None
+
+
+def blob_text(repo: Path, spec: str) -> str | None:
+    data = blob_bytes(repo, spec)
+    return None if data is None else data.decode("utf-8", errors="replace")
 
 
 def _untracked_change(repo: Path, rel: str) -> FileChange:
@@ -428,9 +465,36 @@ def _origins(repo: Path, ref: str) -> dict[str, set[str]]:
     return {"committed": committed, "staged": names("--cached"), "unstaged": names(), "untracked": set()}
 
 
+def resolve_commit(repo: Path, commit: str) -> tuple[str, str, str]:
+    """(full sha, its parent or the empty tree for a root commit, label like 'a1b2c3d Subject')."""
+    sha = git(repo, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}").strip()
+    parents = git(repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    if len(parents) > 1:
+        raise RuntimeError(f"{commit} is a merge commit; summarize the commits it merged instead")
+    short, subject = git(repo, "log", "-1", "--format=%h%x1f%s", sha).strip().split("\x1f", 1)
+    return sha, parents[0] if parents else EMPTY_TREE, f"{short} {subject}"
+
+
+def commits_between(repo: Path, base: str, paths: list[str] | None = None) -> list[dict]:
+    """Non-merge commits in base..HEAD that touch the scope, oldest first: {sha, short, subject}."""
+    if not has_head(repo) or base == EMPTY_TREE:
+        span = ["HEAD"] if has_head(repo) else []
+    else:
+        span = [f"{base}..HEAD"]
+    if not span:
+        return []
+    scope = [to_repo_rel(repo, p) for p in (paths or [])]
+    log = git(repo, "log", "--reverse", "--topo-order", "--no-merges", "--format=%H%x1f%h%x1f%s", *span,
+              *(["--", *[s or "." for s in scope]] if scope else []))
+    return [dict(zip(("sha", "short", "subject"), line.split("\x1f", 2))) for line in log.splitlines() if line]
+
+
 def collect(repo: Path, base: str | None = None, paths: list[str] | None = None,
-            excludes: list[str] | None = None, pair_renames: bool = True) -> ChangeSet:
+            excludes: list[str] | None = None, pair_renames: bool = True, commit: str | None = None) -> ChangeSet:
+    """The change set from base to the working tree, or (commit=) of exactly one commit; base is then ignored."""
     repo = repo_root(repo)
+    if commit:
+        return _collect_commit(repo, commit, paths, excludes)
     ref, label = resolve_base(repo, base)
     scope = [to_repo_rel(repo, p) for p in (paths or [])]
     excl = list(DEFAULT_EXCLUDES) + list(excludes or [])
@@ -454,6 +518,21 @@ def collect(repo: Path, base: str | None = None, paths: list[str] | None = None,
         f.origins = ["untracked"] if f.status == "?" else [o for o in ORIGINS if f.path in where[o]]
     files.sort(key=lambda f: f.path)
     return ChangeSet(repo, ref, label, files, scope)
+
+
+def _collect_commit(repo: Path, commit: str, paths: list[str] | None, excludes: list[str] | None) -> ChangeSet:
+    sha, parent, label = resolve_commit(repo, commit)
+    scope = [to_repo_rel(repo, p) for p in (paths or [])]
+    excl = list(DEFAULT_EXCLUDES) + list(excludes or [])
+    files = []
+    for e in _raw_entries(repo, parent, sha):
+        live = [p for p in (e["path"], e["old"]) if p]
+        if any(in_scope(p, scope) for p in live) and not all(excluded(p, excl, scope) for p in live):
+            fc = _tracked_change(repo, parent, e, sha)
+            fc.origins = ["committed"]
+            files.append(fc)
+    files.sort(key=lambda f: f.path)
+    return ChangeSet(repo, parent, label, files, scope, sha)
 
 
 # --------------------------------------------------------------- symbols

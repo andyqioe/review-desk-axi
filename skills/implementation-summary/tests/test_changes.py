@@ -642,6 +642,119 @@ class SourceAndFallback(unittest.TestCase):
         self.assertIn("scratch-branch/lib/", (self.tmp / "central" / "scratch" / "INDEX.md").read_text())
 
 
+class CommitMode(unittest.TestCase):
+    """One commit's change set: git's diff of that commit against its parent, contents read from the commit,
+    and the Commits block that switches a multi-commit review to one summary per commit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="impl-summary-commits-")).resolve()
+        r = cls.repo = cls.tmp / "repo"
+        r.mkdir()
+        for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+            git(r, *args)
+        (r / "app.py").write_text("".join(f"line {i}\n" for i in range(1, 31)))
+        (r / "old.txt").write_text("".join(f"keep {i}\n" for i in range(20)))
+        (r / "gone.md").write_text("# Gone\n\nbye\n")
+        git(r, "add", "-A"); git(r, "commit", "-qm", "Root")
+        cls.root = git(r, "rev-parse", "HEAD").strip()
+        (r / "app.py").write_text("".join(f"line {i}\n" if i % 10 else f"changed {i}\n" for i in range(1, 31)))
+        git(r, "commit", "-qam", "Change every tenth line")
+        git(r, "mv", "old.txt", "new.txt")
+        (r / "new.txt").write_text("".join(f"keep {i}\n" for i in range(20)) + "added\n")
+        (r / "blob.bin").write_bytes(b"\0\1\2" * 50)
+        os.symlink("app.py", r / "link")
+        git(r, "add", "-A"); git(r, "commit", "-qm", "Rename, binary and symlink")
+        git(r, "rm", "-q", "gone.md"); git(r, "commit", "-qm", "Delete gone.md")
+        cls.commits = git(r, "rev-list", "--reverse", f"{cls.root}..HEAD").split()
+        (r / "app.py").write_text("working tree\n")  # uncommitted: excerpts of a commit must not see it
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_each_commit_matches_git_and_rebuilds_from_its_parent(self):
+        for sha in [self.root, *self.commits]:
+            cs = changes.collect(self.repo, commit=sha[:8])
+            self.assertEqual(cs.commit, sha)
+            parent = changes.EMPTY_TREE if sha == self.root else f"{sha}^"
+            names = set(git(self.repo, "diff", "--name-only", "-M", parent, sha).split())
+            self.assertEqual({f.path for f in cs.files}, names, sha)
+            numstat = {}
+            for line in git(self.repo, "diff", "--numstat", "-M", parent, sha).splitlines():
+                a, d, path = line.split("\t")
+                numstat[path.split(" => ")[-1].rstrip("}")] = (a, d)
+            for f in cs.files:
+                self.assertEqual(f.origins, ["committed"])
+                if f.binary or f.symlink is not None:
+                    continue
+                self.assertEqual(numstat.get(f.path), (str(f.adds), str(f.dels)), f.path)
+                if f.status != "D":
+                    self.assertEqual(f.new_lines, base_lines(self.repo, sha, f.path), f.path)
+                    old = [] if f.status == "A" else base_lines(self.repo, parent, f.old_path or f.path)
+                    self.assertEqual(apply(old, f.hunks), f.new_lines, f.path)
+
+    def test_special_files_in_a_commit(self):
+        cs = changes.collect(self.repo, commit=self.commits[1])
+        by = {f.path: f for f in cs.files}
+        self.assertEqual((by["new.txt"].status, by["new.txt"].old_path), ("R", "old.txt"))
+        self.assertTrue(by["blob.bin"].binary and by["blob.bin"].new_size == 150)
+        self.assertEqual(by["link"].symlink, "app.py")
+        self.assertEqual([f.status for f in changes.collect(self.repo, commit=self.commits[2]).files], ["D"])
+
+    def test_commits_block_lists_every_part(self):
+        r = run("collect_changes.py", "--base", self.root, cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Commits: 3 plus uncommitted work. PER-COMMIT MODE", r.stdout)
+        for i, sha in enumerate(self.commits, 1):
+            self.assertIn(f"#   {i}/4 {sha[:7]} ", r.stdout)
+        self.assertIn("#   4/4 uncommitted", r.stdout)
+        j = json.loads(run("collect_changes.py", "--base", self.root, "--format", "json", cwd=self.repo).stdout)
+        self.assertEqual(([c["sha"] for c in j["commits"]], j["uncommitted"]), (self.commits, True))
+        scoped = run("collect_changes.py", "--base", self.root, "--paths", "gone.md", cwd=self.repo).stdout
+        self.assertNotIn("PER-COMMIT MODE", scoped)  # one commit in scope and nothing uncommitted: one summary
+        self.assertIn("Base is HEAD", run("collect_changes.py", cwd=self.repo).stdout)
+        one = run("collect_changes.py", "--commit", self.commits[0], cwd=self.repo).stdout
+        self.assertIn(f"# Changes in commit {self.commits[0][:7]} Change every tenth line", one)
+        self.assertNotIn("PER-COMMIT MODE", one)
+        self.assertEqual(run("collect_changes.py", "--commit", "HEAD", "--base", self.root, cwd=self.repo).returncode, 2)
+
+    def test_commit_page_quotes_the_commit_not_the_working_tree(self):
+        body = self.tmp / "body.html"
+        body.write_text('<figure data-src="app.py:9-11"></figure><figure data-diff="app.py"></figure>')
+        r = run("build_page.py", "--body", str(body), "--title", "Tenth", "--commit", self.commits[0], "--editor", "none",
+                "--summary", str(body), cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = Path(r.stdout.split("wrote ")[1].split(" (")[0])
+        self.assertTrue(page.name.endswith(f"-tenth-{self.commits[0][:7]}.html"), page.name)
+        text = page.read_text()
+        self.assertIn("changed 10", text)
+        self.assertNotIn("working tree", text)
+        self.assertIn(f"in commit {self.commits[0][:7]}", text)
+        missing = self.tmp / "missing.html"
+        missing.write_text('<figure data-src="new.txt:1-2"></figure>')  # new.txt does not exist yet at that commit
+        r = run("build_page.py", "--body", str(missing), "--commit", self.commits[0], "--editor", "none", cwd=self.repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("missing file in commit", r.stderr)
+        r = run("build_page.py", "--body", str(body), "--commit", "HEAD", "--review-data", cwd=self.repo)
+        self.assertEqual(r.returncode, 2)
+
+    def test_merge_commit_is_refused(self):
+        git(self.repo, "stash", "-q")
+        try:
+            git(self.repo, "checkout", "-qb", "side", self.commits[0])
+            (self.repo / "side.txt").write_text("s\n")
+            git(self.repo, "add", "side.txt"); git(self.repo, "commit", "-qm", "Side")
+            git(self.repo, "checkout", "-q", "main")
+            git(self.repo, "merge", "-q", "--no-edit", "side")
+            with self.assertRaisesRegex(RuntimeError, "merge commit"):
+                changes.collect(self.repo, commit="HEAD")
+            self.assertNotIn("Merge", " ".join(c["subject"] for c in changes.commits_between(self.repo, self.root)))
+        finally:
+            git(self.repo, "reset", "-q", "--hard", self.commits[-1])
+            git(self.repo, "stash", "pop", "-q")
+
+
 class UnbornRepo(unittest.TestCase):
     """A repository before its first commit: no HEAD, so the base is git's empty tree."""
 

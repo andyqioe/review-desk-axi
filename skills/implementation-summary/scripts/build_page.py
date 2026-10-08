@@ -50,8 +50,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import archive  # noqa: E402
-from changes import ORIGINS, ChangeSet, FileChange, Hunk, collect, hunk_symbols  # noqa: E402
-from collect_changes import inventory_md, to_json  # noqa: E402
+from changes import ORIGINS, ChangeSet, FileChange, Hunk, blob_text, collect, hunk_symbols  # noqa: E402
+from collect_changes import against, inventory_md, to_json  # noqa: E402
 
 SKILL = Path(__file__).resolve().parent.parent
 ASSETS = SKILL / "assets"
@@ -208,23 +208,23 @@ def write_review_data(b: "Builder", out: Path) -> int:
 # --------------------------------------------------------------- builder
 class Builder:
     def __init__(self, repo: Path, base: str | None, editor: str, paths: list[str] | None, excludes: list[str],
-                 source: Path | None = None):
+                 source: Path | None = None, commit: str | None = None):
         self.repo = repo
         self.link_root = source or repo  # editor links open the real project, not a scratch copy
         self.editor = editor
         self.errors: list[str] = []
         self.warnings: list[str] = []
         self.stats = {"code": 0, "diff": 0, "loc": 0, "scene": 0, "inventory": 0, "terms": 0}
-        self.cs: ChangeSet = collect(repo, base, paths, excludes)
+        self.cs: ChangeSet = collect(repo, base, paths, excludes, commit=commit)
         self.full: ChangeSet | None = None  # unscoped, for data-diff on files outside --paths
-        self.base_arg, self.excludes = base, excludes
+        self.base_arg, self.excludes, self.commit = base, excludes, self.cs.commit
         self.referenced: set[str] = set()
 
     def change(self, rel: str) -> FileChange | None:
         fc = self.cs.get(rel)
         if fc is None:
             if self.full is None:
-                self.full = collect(self.repo, self.base_arg, None, self.excludes)
+                self.full = collect(self.repo, self.base_arg, None, self.excludes, commit=self.commit)
             fc = self.full.get(rel)
         return fc
 
@@ -238,6 +238,12 @@ class Builder:
         return f"{self.editor}://file{path}{f':{line}' if line else ''}"
 
     def read_lines(self, rel: str) -> list[str] | None:
+        if self.commit:  # a commit's page quotes the file as that commit left it
+            text = blob_text(self.repo, f"{self.commit}:{rel}")
+            if text is None:
+                self.errors.append(f"missing file in commit {self.commit[:10]}: {rel}")
+                return None
+            return text.splitlines()
         path = self.repo / rel
         if not path.is_file():
             self.errors.append(f"missing file: {rel}")
@@ -287,7 +293,7 @@ class Builder:
         parts = [fc.status_name]
         if fc.old_path:
             parts.append(f"from {fc.old_path}")
-        parts.append(f"vs {self.cs.base_label.replace(' (auto)', '')}")
+        parts.append(f"in {self.cs.base_label.split()[0]}" if self.commit else f"vs {self.cs.base_label.replace(' (auto)', '')}")
         return " · ".join(parts)
 
     # -------------------------------------------------------- directives
@@ -322,7 +328,7 @@ class Builder:
         fc = self.change(rel)
         if fc is None:
             what = "missing file" if not (self.repo / rel).exists() else "no change"
-            self.errors.append(f"data-diff {rel}: {what} vs {self.cs.base_label}")
+            self.errors.append(f"data-diff {rel}: {what} {against(self.cs)}")
             return ""
         want = [int(x) for x in re.split(r"[,\s]+", attrs.get("data-hunks", "").strip()) if x.isdigit()]
         bad = [w for w in want if w < 1 or w > len(fc.hunks)]
@@ -351,7 +357,7 @@ class Builder:
     def inventory(self, attrs: dict) -> str:
         cs = self.cs
         if attrs.get("data-paths"):
-            cs = collect(self.repo, self.base_arg, attrs["data-paths"].split(), self.excludes)
+            cs = collect(self.repo, self.base_arg, attrs["data-paths"].split(), self.excludes, commit=self.commit)
         groups: OrderedDict[str, list[FileChange]] = OrderedDict()
         for f in cs.files:
             parent = str(Path(f.path).parent)
@@ -362,7 +368,7 @@ class Builder:
             '<div class="changes-bar">',
             f'<span class="chip tally-files"><b>{len(cs.files)}</b> file{"s" if len(cs.files) != 1 else ""}</span>',
             f'<span class="chip tally-lines"><span class="add">+{cs.adds}</span> <span class="del">−{cs.dels}</span></span>',
-            f'<span class="chip">vs {html.escape(cs.base_label)}</span>',
+            f'<span class="chip">{html.escape(against(cs))}</span>',
         ]
         if cs.scope:
             out.append(f'<span class="chip">in {html.escape(" ".join(s or "." for s in cs.scope))}</span>')
@@ -520,6 +526,7 @@ def main() -> int:
                                                     "(its branch, or today's date outside git)")
     ap.add_argument("--repo", default=".", help="repo root that directive paths are relative to")
     ap.add_argument("--base", default=None, help="git ref to diff against (default: same auto base as collect_changes.py)")
+    ap.add_argument("--commit", default=None, help="one commit's page: its diff against its parent, excerpts as of that commit")
     ap.add_argument("--paths", nargs="*", default=None, help="scope of Every change; pass the same --paths as collect_changes.py")
     ap.add_argument("--exclude", nargs="*", default=[], help="extra files/dirs/globs to leave out of Every change")
     ap.add_argument("--editor", default=os.environ.get("IMPL_SUMMARY_EDITOR", "vscode"),
@@ -531,6 +538,8 @@ def main() -> int:
                          "or pass the existing session folder when rebuilding after a review")
     args = ap.parse_args()
 
+    if args.commit and (args.base or args.review_data):
+        ap.error("--commit builds one commit's page: drop --base, and build --review-data on the overview page instead")
     repo = Path(args.repo).resolve()
     summary = Path(args.summary) if args.summary else None
     source = Path(args.source).expanduser().resolve() if args.source else None
@@ -541,7 +550,7 @@ def main() -> int:
         print(f"build_page: --summary {summary} does not exist", file=sys.stderr)
         return 1
     try:
-        b = Builder(repo, args.base, args.editor, args.paths, args.exclude, source)
+        b = Builder(repo, args.base, args.editor, args.paths, args.exclude, source, args.commit)
         body = b.expand(Path(args.body).read_text(encoding="utf-8"))
     except RuntimeError as e:
         print(f"build_page: {e}", file=sys.stderr)
@@ -566,7 +575,8 @@ def main() -> int:
             .replace("{{BODY}}", body))
     raw_body = Path(args.body).read_text(encoding="utf-8")
     folder = archive.target_dir(b.cs, args.project, args.milestone, args.component, source)
-    written, fallback = archive.persist_or_fallback(folder, repo, archive.stem(args.title), page, raw_body,
+    name = archive.stem(args.title) + (f"-{b.commit[:7]}" if b.commit else "")  # one page per commit, side by side
+    written, fallback = archive.persist_or_fallback(folder, repo, name, page, raw_body,
                                                     json.dumps(to_json(b.cs), indent=1) + "\n", inventory_md(b.cs), summary)
     if fallback:
         folder = written[0].parent
