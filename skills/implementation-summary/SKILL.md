@@ -43,7 +43,8 @@ Around the art, the text is structured for scanning: short headings, one bold le
    When recapping work you did not watch (an earlier session, a branch handed to you), take decisions from commit messages, code comments and handoff docs, attribute them ("per `HANDOFF.md`"), and say in Proof that you ran nothing unless you did.
 2. **Find the story** (next section) before writing a word of output.
 3. **Draw the scenes.** Read `references/particle-grammar.md`; it defines the glyph vocabulary the page engine understands and gives patterns for each kind of change.
-4. **Write the terminal summary** in the shape below, in the language of `LANGUAGE.md`, and save it to a scratch file (`$SCRATCH/summary.md`) exactly as you will reply.
+4. **Write the terminal summary** in the shape below, in Simplified Technical English (`STE.md`) and the language of `LANGUAGE.md`, and save it to a scratch file (`$SCRATCH/summary.md`) exactly as you will reply.
+   Run `python3 <skill-dir>/scripts/ste_check.py $SCRATCH/summary.md` and fix each warning, or keep the sentence when the rule does not apply (a technical name, an unknown actor).
 5. **Build the companion page.** Read `references/page.md`, write the body fragment, run `scripts/build_page.py --summary $SCRATCH/summary.md --review-data`.
    - The page reuses your scenes verbatim and pulls code excerpts from disk by line range.
    - Every build persists the page, the terminal summary, the body, the change model and the inventory into `~/.claude/implementation-summaries/<project>/<milestone>/<component>/` (project = repository, milestone = branch, component = the most-touched area; override with `--project`, `--milestone`, `--component`) and refreshes that project's `INDEX.md`.
@@ -201,6 +202,9 @@ Link a symbol at its definition line; link a behavior at the line that decides i
 
 ## Writing well
 
+- **Write in Simplified Technical English.** `STE.md` gives the ASD-STE100 rules: one idea per sentence, 25 words or fewer (20 for an instruction), the active voice, simple tenses, no -ing forms as verbs, and short common words.
+STE is how each sentence reads; `LANGUAGE.md` adds what this summary needs on top of it.
+`build_page.py` prints STE warnings for the summary and the page, so read them before you reply.
 - **Read `LANGUAGE.md` before writing a word.** It is the language protocol for both the terminal and the page: headings that state a guarantee, risk then guard, plain sentences with an actor, and glossary cards for project terms instead of inline jargon.
 - **Structure for scanning.** Every story is a bold lead sentence followed by labeled bullets (`**Risk**`, `**Behavior**`, `**Mechanism**`, `**Decision**`, `**Where**`), and lists hold everything parallel: scene stops, also-changed groups, checks run, loose threads.
 A reader should get the change from the headings and lead sentences alone, then drop into the bullets they care about.
@@ -238,7 +242,9 @@ Every size asks whether to open a Review Desk (step 6); for a tiny change, build
 - `hooks/activate.py` - the activation hooks (`review-desk-axi setup hooks` installs them): a turn that changed files, through any tool or a `git commit`, must end with this skill, and every reminder names the base the work began at and when per-commit mode applies.
 - `tests/` - `python3 -m unittest discover -s tests` from the skill directory: oracle tests against git on a generated ~300-file change set and on a multi-commit repo, and the hook against synthetic transcripts; set `IMPL_SUMMARY_TEST_REPO=<repo>` to also check a real working tree.
 - `references/particle-grammar.md` - glyph vocabulary, frame rules, scene patterns. Read before drawing.
-- `LANGUAGE.md` - the language protocol: how every sentence of the summary reads. Read before step 4.
+- `STE.md` - the ASD-STE100 writing rules every sentence follows, for the summary, the page and the Review Desk. Read before step 4.
+- `scripts/ste_check.py` - warns on the STE rules a script can check (`--strict` exits 1, `--format json`); `build_page.py` runs it on every build.
+- `LANGUAGE.md` - the language protocol on top of STE: guarantee headings, risk then guard, glossary cards. Read before step 4.
 - `references/page.md` - page building blocks (story bullets, risk and guard pairs, glossary cards), build and open commands. Read before step 5.
 - the `review-desk` skill, installed beside this one - the Review Desk (step 6): editor, reviewer subagents, durable backlog, per-commit stories. Its SKILL.md owns the reviewer protocol.
 - `assets/` - page shell, styles, the particle engine and the glossary cards (`glossary.js`); used by the build, no need to read.

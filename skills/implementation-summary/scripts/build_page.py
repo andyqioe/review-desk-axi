@@ -50,6 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import archive  # noqa: E402
+import ste_check  # noqa: E402
 from changes import ORIGINS, ChangeSet, FileChange, Hunk, blob_text, collect, hunk_symbols  # noqa: E402
 from collect_changes import against, inventory_md, to_json  # noqa: E402
 
@@ -593,6 +594,11 @@ def main() -> int:
     print(f"wrote {out} ({s['scene']} scenes, {s['code']} code, {s['diff']} diffs, {s['loc']} links, "
           f"{s['inventory']} files under Every change, {s['terms']} glossary terms, {len(page) // 1024} KB)")
     print(b.coverage())
+    # STE.md is the writing standard: warn about the text a person reads (the terminal summary and the page's prose)
+    for label, text, kind in ((summary and summary.name, summary.read_text(encoding="utf-8") if summary else "", "markdown"),
+                              ("page", raw_body, "html")):
+        if text:
+            print("\n".join(ste_check.summary_lines(ste_check.check(text, kind), label)))
     if args.review_data:
         rd = folder / f"{written[0].stem}.review" if args.review_data == "auto" else Path(args.review_data).expanduser()
         n = write_review_data(b, rd)

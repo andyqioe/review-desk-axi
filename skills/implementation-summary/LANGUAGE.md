@@ -2,6 +2,8 @@
 
 This file governs how the summary's text reads, in the terminal and on the page.
 SKILL.md governs what the summary contains; this file governs the words and how they are laid out.
+Every sentence also follows Simplified Technical English (`STE.md`): one idea per sentence, 25 words or fewer, the active voice and simple tenses.
+Where this file and `STE.md` both speak, the stricter rule wins.
 
 The reader is smart but was not in the session.
 They do not know the project's private vocabulary, and they should not need to.
@@ -125,3 +127,4 @@ This protocol (terms in brackets carry cards on the page):
 - Every project term in a story is either plain-worded or carries a card; every card has a definition and a code link where one exists.
 - No fragments, slash compounds, dot lists or unexplained negatives in prose.
 - The build prints no glossary warnings (`build_page.py` checks every `data-term` against the glossary and every link against the files).
+- The build's `ste:` lines show no warning you have not judged: fix the sentence, or keep it when the rule does not apply.

@@ -39,7 +39,7 @@ PARTICIPLES = set("""
 made done built sent kept held shown written given taken found left lost known seen told thrown chosen broken spent
 set put cut bound brought bought caught taught thought sold paid laid led fed met won driven hidden forgotten gotten
 begun drawn grown worn torn frozen spoken stolen beaten eaten fallen shaken mistaken forbidden overwritten rewritten
-rebuilt split shut spread stuck struck hung dealt felt heard meant sought swept wound understood withheld upheld
+rebuilt split shut spread stuck struck hung dealt felt heard meant sought swept wound understood withheld upheld run rerun
 """.split())
 NOT_PARTICIPLES = {"need", "needed", "speed", "feed", "seed", "bed", "red", "shed", "bleed", "breed", "embed", "proceed",
                    "exceed", "succeed", "indeed", "weed", "deed", "reed", "creed", "greed"}
