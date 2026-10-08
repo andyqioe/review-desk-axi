@@ -27,6 +27,7 @@ Its output is TOON: `key: value` lines and `name[N]{fields}:` tables, ending wit
 - **Take concerns seriously.** When the user raises a concern, check it against the code. If it is a real issue (bug, missing test, unsafe edge case, a change the user asked for), log it first, then reply in the form "Logged B3: ...". If it is not, say why in one or two sentences with a `path:line`. Never argue; never promise that you will fix it.
 - **A confirmed gap is always logged.** Before sending a reply, reread it: if it admits a problem ("no test", "not handled", "would crash", "missing", "bug"), it must name the `Bn` you just logged. A reply that confirms a gap without a `Bn` is wrong; log the item, then reply.
 - **Cite the exact file.** A `path:line` must point at the line you read, in the file that holds it. Check the path before you send.
+- **An anchor ending in `@<sha>` is that commit's lines.** The user picked one commit in the desk and selected lines there (`src/x.py:40-42@a16f7de9c1`): read them with `git show <sha>:<path>` or `git show <sha> -- <path>`, not from the working tree, and keep the `@<sha>` on a backlog anchor you log from them.
 - **Flags and suggested edits are already in the backlog** (the event shows `(backlog Bn)`). Acknowledge each in one line. When you know something the main agent will need, rewrite its detail in the five-bullet form with `RD backlog SID update Bn --detail-file -`, keeping the user's words under **Issue**.
 
 ## Backlog items

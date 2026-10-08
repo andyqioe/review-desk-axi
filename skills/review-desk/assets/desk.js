@@ -22,12 +22,17 @@ const S = {
   trayKnown: null, picked: new Set(), pane: "chat", filter: "", closedDirs: new Set(), edit: null,
   live: null, selSource: null, skills: [], slashIdx: 0, waitTimer: null, draft: null,
   pageSeen: new Map(),
+  // the commit picker: S.all is the review's whole change set, S.manifest the entry on screen
+  all: { files: [] }, commits: { entries: [], uncommitted: null }, commit: "all", views: new Map(),
 };
 // Tabs are "story", a repository path, or "page:P<n>" (an HTML page shown read-only).
 const isPage = (t) => typeof t === "string" && t.startsWith("page:");
 const isCode = (t) => t !== "story" && !isPage(t);
 const pageOf = (t) => (S.state && S.state.pages || []).find((pg) => `page:${pg.id}` === t);
 const pageName = (pg) => pg.title || pg.path.split("/").pop();
+// A commit picker entry: "all" (the whole review), a commit's sha, or "uncommitted" (the working tree vs HEAD).
+// Only a commit's own view shows lines that may differ from the working tree's.
+const isSha = (c) => typeof c === "string" && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(c);
 
 // ------------------------------------------------------------------ api
 async function api(path, opts = {}) {
@@ -222,6 +227,126 @@ function renderTree() {
   $("#tree").innerHTML = html.join("") || '<p class="empty">No changed files.</p>';
 }
 
+// ---------------------------------------------------------- commit picker
+// "All changes", then each commit since the review's base, oldest first, then the uncommitted rest.
+// A reload appends the commits made since; the picked entry scopes the tree, the diffs and the file view.
+const COMMIT_KEY = `review-desk:${D.sid}:commit`;
+function viewIds() {
+  return ["all", ...S.commits.entries.map((e) => e.id), ...(S.commits.uncommitted ? ["uncommitted"] : [])];
+}
+function rememberedCommit() { try { return sessionStorage.getItem(COMMIT_KEY) || "all"; } catch (_) { return "all"; } }
+async function viewManifest(id) {
+  if (id === "all") return S.all;
+  if (!S.views.has(id)) S.views.set(id, api(`manifest?c=${id}`).catch(() => ({ files: [] })));
+  return S.views.get(id);
+}
+async function setCommit(id, opts = {}) {
+  if (!viewIds().includes(id)) id = "all";
+  const moved = id !== S.commit;
+  S.commit = id;
+  const m = await viewManifest(id);
+  if (S.commit !== id) return;  // a later pick won
+  S.manifest = m;
+  S.byPath = new Map((m.files || []).map((f) => [f.path, f]));
+  try { sessionStorage.setItem(COMMIT_KEY, id); } catch (_) {}
+  if (moved) { setSel(null); closePop(); }
+  renderTree();
+  renderPicker();
+  if (moved && opts.why) toast(opts.why);
+  if (moved && !opts.quiet && isCode(S.active)) {
+    if (S.byPath.has(S.active)) S.view = "diff";
+    renderCode();
+  }
+}
+function stepCommit(by) {
+  const ids = viewIds(), i = ids.indexOf(S.commit) + by;
+  if (i >= 0 && i < ids.length) setCommit(ids[i]);
+}
+function entryOf(id) {
+  if (id === "all") {
+    const f = S.all.files || [], n = S.commits.entries.length;
+    return { id, sha: "", title: "All changes", sub: `vs ${S.all.base_label || "base"} · ${n} commit${n === 1 ? "" : "s"}${S.commits.uncommitted ? " + uncommitted" : ""}`,
+             files: f.length, adds: f.reduce((a, x) => a + (x.adds || 0), 0), dels: f.reduce((a, x) => a + (x.dels || 0), 0) };
+  }
+  if (id === "uncommitted") return { id, sha: "", title: "Uncommitted", sub: "working tree vs HEAD", ...S.commits.uncommitted };
+  const e = S.commits.entries.find((x) => x.id === id);
+  return { id, sha: e.short, title: e.subject, sub: `${e.author} · ${ago(e.time)}`, files: e.files, adds: e.adds, dels: e.dels };
+}
+function renderPicker() {
+  const ids = viewIds();
+  $("#commit-pick").hidden = ids.length < 3;  // one commit and nothing else is the same as "All changes"
+  if (ids.length < 3) return;
+  const cur = entryOf(S.commit), i = ids.indexOf(S.commit);
+  $("#cp-sha").textContent = cur.sha;
+  $("#cp-sha").hidden = !cur.sha;
+  $("#cp-title").textContent = cur.title;
+  const n = S.commits.entries.length;
+  $("#cp-pos").textContent = S.commit === "all" ? `${n} commit${n === 1 ? "" : "s"}` : `${i}/${ids.length - 1}`;
+  $("#cp-pos").title = S.commit === "all" ? "commits in this review" : "position in the review";
+  $("#cp-btn").title = `${cur.sha ? cur.sha + " " : ""}${cur.title}\n${cur.sub}`;
+  $("#cp-prev").disabled = i <= 0;
+  $("#cp-next").disabled = i >= ids.length - 1;
+  if (!$("#cp-menu").hidden) renderPickerMenu();
+}
+function renderPickerMenu() {
+  const ids = viewIds();
+  $("#cp-menu").innerHTML = ids.map((id, k) => {
+    const e = entryOf(id);
+    const sep = k === 1 || (id === "uncommitted" && k > 1) ? '<div class="cp-sep" role="presentation"></div>' : "";
+    return sep + `<div class="cp-item${id === S.commit ? " active" : ""}${id === "all" || id === "uncommitted" ? " special" : ""}" role="option" tabindex="-1" aria-selected="${id === S.commit}" data-c="${esc(id)}">` +
+      `<div class="cp-line">${e.sha ? `<span class="cp-sha">${esc(e.sha)}</span>` : ""}<span class="cp-name">${esc(e.title)}</span>` +
+      `<span class="cp-stat"><span class="a">+${e.adds || 0}</span> <span class="d">−${e.dels || 0}</span></span></div>` +
+      `<div class="cp-sub">${esc(e.files || 0)} file${e.files === 1 ? "" : "s"} · ${esc(e.sub)}</div></div>`;
+  }).join("") + (S.commits.omitted ? `<div class="cp-note">${S.commits.omitted} older commit${S.commits.omitted === 1 ? "" : "s"} only in All changes</div>` : "")
+    + (S.commits.merges ? `<div class="cp-note">${S.commits.merges} merge commit${S.commits.merges === 1 ? "" : "s"} not listed</div>` : "");
+}
+function pickerMenu(open) {
+  const menu = $("#cp-menu");
+  menu.hidden = !open;
+  $("#cp-btn").setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  renderPickerMenu();
+  const r = $("#commit-pick").getBoundingClientRect();
+  Object.assign(menu.style, { top: `${Math.round(r.bottom + 4)}px`, left: `${Math.round(r.left)}px`, minWidth: `${Math.round(r.width)}px`,
+                              maxWidth: `${Math.max(Math.round(r.width), Math.min(440, window.innerWidth - r.left - 16))}px` });
+  const cur = $(".cp-item.active", menu) || $(".cp-item", menu);
+  cur?.focus();
+  cur?.scrollIntoView({ block: "nearest" });
+}
+function wirePicker() {
+  $("#cp-btn").addEventListener("click", () => pickerMenu($("#cp-menu").hidden));
+  $("#cp-prev").addEventListener("click", () => stepCommit(-1));
+  $("#cp-next").addEventListener("click", () => stepCommit(1));
+  const menu = $("#cp-menu");
+  menu.addEventListener("click", (e) => {
+    const it = e.target.closest(".cp-item");
+    if (!it) return;
+    pickerMenu(false);
+    $("#cp-btn").focus();
+    setCommit(it.dataset.c);
+  });
+  menu.addEventListener("keydown", (e) => {
+    const items = $$(".cp-item", menu), at = items.indexOf(document.activeElement);
+    const go = (k) => { const el = items[Math.max(0, Math.min(items.length - 1, k))]; el?.focus(); el?.scrollIntoView({ block: "nearest" }); };
+    if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); go(at + 1); }
+    else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); go(at - 1); }
+    else if (e.key === "Home") { e.preventDefault(); go(0); }
+    else if (e.key === "End") { e.preventDefault(); go(items.length - 1); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); document.activeElement?.click(); }
+    else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); pickerMenu(false); $("#cp-btn").focus(); }
+  });
+  document.addEventListener("mousedown", (e) => { if (!menu.hidden && !e.target.closest("#commit-pick")) pickerMenu(false); });
+  window.addEventListener("resize", () => { if (!menu.hidden) pickerMenu(false); });
+  // [ and ] step through the commits from anywhere outside a text field, like a review tool's prev/next
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== "[" && e.key !== "]") || $("#commit-pick").hidden) return;
+    const t = e.target;
+    if (t.closest?.("input, textarea, [contenteditable], .inline-edit, #search")) return;
+    e.preventDefault();
+    stepCommit(e.key === "]" ? 1 : -1);
+  });
+}
+
 function renderTray() {
   const tray = S.state.tray || [];
   $("#tray-wrap").hidden = !tray.length;
@@ -238,14 +363,15 @@ function renderTray() {
   fresh.forEach((t) => {
     S.trayKnown.add(t.ref);
     const ref = parseRef(t.ref);
-    if (t.focus) openFile(ref.path, ref); else addTab(ref.path);
+    if (t.focus) openRef(ref); else addTab(ref.path);
   });
   if (fresh.length) { renderTabs(); toast(`Reviewer pinned ${fresh.map((t) => t.ref).join(", ")}`); }
 }
 
+// path[:a-b], as agents write it: optionally old:path (the removed side) and @<commit> (lines as of that commit)
 function parseRef(ref) {
-  const m = String(ref).match(/^(.*?)(?::(\d+)(?:-(\d+))?)?$/);
-  return { path: m[1], range: m[2] ? (m[3] ? `${m[2]}-${m[3]}` : m[2]) : null };
+  const m = String(ref).match(/^(old:)?(.*?)(?::(\d+)(?:-(\d+))?)?(?:@([0-9a-f]{7,64}))?$/);
+  return { path: m[2], range: m[3] ? (m[4] ? `${m[3]}-${m[4]}` : m[3]) : null, side: m[1] ? "old" : "new", commit: m[5] || null };
 }
 
 // ------------------------------------------------------------------ tabs
@@ -349,6 +475,19 @@ function tabSlot(x, skip) {
   return Math.max(1, i);
 }
 
+// Open a reference from outside the file tree (a pin, a chip, a link, a search hit). Its lines belong to one
+// version: the commit it names, else the working tree. A commit's view would show other lines, so the
+// picker moves to the view the reference was written against first.
+async function openRef(ref, opts = {}) {
+  let path = ref.path;
+  const hit = ref.commit && S.commits.entries.find((e) => e.id.startsWith(ref.commit));
+  if (ref.commit && !hit && !ref.range) path = `${path}@${ref.commit}`;  // a path that ends in @hex, not a commit
+  if (hit) await setCommit(hit.id, { quiet: true, why: `Showing ${hit.short}, where those lines are` });
+  else if (isSha(S.commit)) await setCommit("all", { quiet: true, why: "Showing all changes: that reference is to the working tree" });
+  const view = opts.view || (S.byPath.has(path) ? undefined : "file");  // a line outside the diff is only in the whole file
+  return openFile(path, { range: ref.range, side: ref.side || "new", view });
+}
+
 async function openFile(path, opts = {}) {
   addTab(path);
   S.active = path;
@@ -377,24 +516,27 @@ function closeTab(path) {
 const OFFLINE = false;
 const unreachable = (err) => err instanceof TypeError;  // fetch rejects with TypeError when nothing answers
 async function getDiff(f) {
-  if (!S.diffs.has(f.n)) {
-    S.diffs.set(f.n, api(`diff/${f.n}`).then((d) => d.rows || [])
-      .catch((err) => { if (unreachable(err)) { S.diffs.delete(f.n); return OFFLINE; } return []; }));
+  const c = S.commit, key = `${c}:${f.n}`;
+  if (!S.diffs.has(key)) {
+    S.diffs.set(key, api(`diff/${f.n}${c === "all" ? "" : `?c=${c}`}`).then((d) => d.rows || [])
+      .catch((err) => { if (unreachable(err)) { S.diffs.delete(key); return OFFLINE; } return []; }));
   }
-  return S.diffs.get(f.n);
+  return S.diffs.get(key);
 }
+// a file as the current view shows it: as of the picked commit, otherwise the working tree
 async function getFile(path) {
-  if (!S.files.has(path)) {
-    S.files.set(path, api(`file?path=${encodeURIComponent(path)}`).then((d) => d.lines)
-      .catch((err) => { if (unreachable(err)) { S.files.delete(path); return OFFLINE; } return null; }));
+  const at = isSha(S.commit) ? S.commit : "", key = `${at}:${path}`;
+  if (!S.files.has(key)) {
+    S.files.set(key, api(`file?path=${encodeURIComponent(path)}${at ? `&c=${at}` : ""}`).then((d) => d.lines)
+      .catch((err) => { if (unreachable(err)) { S.files.delete(key); return OFFLINE; } return null; }));
   }
-  return S.files.get(path);
+  return S.files.get(key);
 }
 const OFFLINE_NOTE = '<p class="empty">The desk server is not answering (it may be restarting). This view reloads when it is back.</p>';
 
 function editorHref(path, line) {
   const ed = (S.state && S.state.session.editor) || "vscode";
-  const root = S.manifest.link_root || (S.state && S.state.session.repo) || "";
+  const root = S.all.link_root || (S.state && S.state.session.repo) || "";
   if (ed === "none") return null;
   if (ed === "file") return `file://${root}/${path}`;
   return `${ed}://file${root}/${path}${line ? ":" + line : ""}`;
@@ -413,12 +555,15 @@ async function renderCode(opts = {}) {
   $("#tb-open").removeAttribute("target");
   if (story) return refreshFind();
   if (page) { pageBar(); return refreshFind(); }
-  const path = S.active;
+  const path = S.active, at = S.commit;
+  const stale = () => S.active !== path || S.commit !== at;
   const f = S.byPath.get(path);
   const deleted = f && f.badge === "D";
   if (!f) S.view = "file";
   if (deleted) S.view = "diff";
-  $("#tb-path").textContent = f && f.old_path ? `${f.old_path} → ${path}` : path;
+  const entry = isSha(at) && S.commits.entries.find((e) => e.id === at);
+  $("#tb-path").innerHTML = esc(f && f.old_path ? `${f.old_path} → ${path}` : path) +
+    (entry ? `<span class="tb-at" title="${esc(entry.subject)}">at ${esc(entry.short)}</span>` : "");
   $$("#toolbar [data-view]").forEach((b) => {
     b.setAttribute("aria-pressed", String(b.dataset.view === S.view));
     b.disabled = (b.dataset.view === "diff" && !f) || (b.dataset.view === "file" && deleted);
@@ -435,7 +580,7 @@ async function renderCode(opts = {}) {
   let html;
   if (S.view === "diff" && f) {
     const rows = await getDiff(f);
-    if (S.active !== path) return;
+    if (stale()) return;
     if (rows === OFFLINE) { box.innerHTML = OFFLINE_NOTE; return refreshFind(); }
     if (!rows.length) html = '<p class="empty">No line changes (binary, mode or rename only).</p>';
     else if (S.layout === "split") html = splitHtml(rows);
@@ -454,9 +599,9 @@ async function renderCode(opts = {}) {
     else $$(".half .tx", box).forEach((el) => cells.push({ el, text: el.textContent.replace(/​/g, ""), cls: el.parentElement.dataset.cls || "" }));
   } else {
     const lines = await getFile(path);
-    if (S.active !== path) return;
+    if (stale()) return;
     if (lines === OFFLINE) { box.innerHTML = OFFLINE_NOTE; return refreshFind(); }
-    if (!lines) { box.innerHTML = '<p class="empty">This file cannot be shown (missing, binary or too large).</p>'; return refreshFind(); }
+    if (!lines) { box.innerHTML = `<p class="empty">This file cannot be shown (${entry ? `not in ${esc(entry.short)}, ` : "missing, "}binary or too large).</p>`; return refreshFind(); }
     const changed = new Set();
     if (f) ((await getDiff(f)) || []).forEach((r) => { if (r[3] === "add") changed.add(+r[1]); });
     box.innerHTML = '<div class="rows file-view">' + lines.map((t, i) =>
@@ -524,7 +669,7 @@ function setSel(sel) {
   S.sel = sel;
   $$("#code .sel").forEach((el) => el.classList.remove("sel"));
   // the current selection is always attached to the next message as a live [path@a-b] chip
-  const live = sel ? { path: sel.path, range: selRange(), side: sel.side } : null;
+  const live = sel ? withCommit({ path: sel.path, range: selRange(), side: sel.side }) : null;
   if (JSON.stringify(live) !== JSON.stringify(S.live)) { S.live = live; renderAnchors(); }
   if (!sel) { S.selSource = null; return hideSel(); }
   const [a, b] = [Math.min(sel.a, sel.b), Math.max(sel.a, sel.b)];
@@ -627,7 +772,7 @@ function openPop() {
   const note = $("#pop-note", el), ta = $("#pop-code", el);
   const submit = async () => {
     if (!S.edit) return;
-    const anchor = { path: S.edit.path, range: S.edit.range, side: S.edit.side };
+    const anchor = withCommit({ path: S.edit.path, range: S.edit.range, side: S.edit.side });
     const body = { anchor, note: note.value, ...S.tier };
     const edited = ta && S.edit.orig !== null && ta.value !== S.edit.orig;
     if (edited) body.replacement = ta.value;
@@ -681,7 +826,8 @@ async function analyzeSelection() {
   if (S.skills.length && !S.skills.some((k) => k.name === "analyze-code")) return toast("The analyze-code skill is not installed", true);
   const range = selRange();
   try {
-    await post("message", { text: `/analyze-code ${S.active}:${range}`, anchors: [{ path: S.active, range, side: s.side }], ...S.tier });
+    const at = isSha(S.commit) ? `@${shortOf(S.commit)}` : "";
+    await post("message", { text: `/analyze-code ${S.active}:${range}${at}`, anchors: [withCommit({ path: S.active, range, side: s.side })], ...S.tier });
     window.getSelection().removeAllRanges();
     setSel(null);
     setPane("chat");
@@ -714,7 +860,7 @@ function renderChat() {
     const tier = e.model ? `<span class="tierchip">${esc(tierLabel(e))}</span>` : "";
     const anchors = (e.anchors || []).map((a) => {
       const ref = a.range ? `${a.path}:${a.range}` : a.path;
-      return `<span class="chip-loc" data-ref="${esc(ref)}" data-side="${esc(a.side || "new")}">${esc(a.range ? anchorLabel(a) : a.path)}</span>`;
+      return `<span class="chip-loc" data-ref="${esc(ref)}" data-side="${esc(a.side || "new")}" data-commit="${esc(a.commit || "")}">${esc(a.range ? anchorLabel(a) : a.path)}</span>`;
     }).join("");
     const excerpt = (e.anchors || []).filter((a) => a.excerpt).map((a) => `<pre class="excerpt">${esc(a.excerpt)}</pre>`).join("");
     const wait = "";  // the typing row at the end of the log shows who is answering and for how long
@@ -817,13 +963,16 @@ function renderTier() {
   $("#efforts").innerHTML = st.efforts.map((x) => `<button type="button" data-effort="${x}" aria-pressed="${S.tier.effort === x}">${x}</button>`).join("");
 }
 
-const anchorLabel = (a) => `[${a.side === "old" ? "old:" : ""}${a.path}@${a.range}]`;
-const sameAnchor = (x, y) => x && y && x.path === y.path && x.range === y.range && x.side === y.side;
+const shortOf = (c) => (S.commits.entries.find((e) => e.id === c) || {}).short || String(c).slice(0, 7);
+const anchorLabel = (a) => `[${a.side === "old" ? "old:" : ""}${a.path}@${a.range}${a.commit ? ` · ${shortOf(a.commit)}` : ""}]`;
+const sameAnchor = (x, y) => x && y && x.path === y.path && x.range === y.range && x.side === y.side && (x.commit || "") === (y.commit || "");
+// lines picked in one commit's view are that commit's; the reviewer reads them there, not in the working tree
+const withCommit = (a) => (isSha(S.commit) ? { ...a, commit: S.commit } : a);
 
 function renderAnchors() {
   const live = S.live && !S.anchors.some((a) => sameAnchor(a, S.live))
-    ? `<span class="chip-loc live" data-ref="${esc(S.live.path + ":" + S.live.range)}" data-side="${S.live.side}" title="Your current selection; it goes with the next message. Pin it with Ask to keep it after you deselect.">${esc(anchorLabel(S.live))}<button type="button" data-drop="live" aria-label="deselect">×</button></span>` : "";
-  $("#anchors").innerHTML = live + S.anchors.map((a, i) => `<span class="chip-loc" data-ref="${esc(a.path + ":" + a.range)}" data-side="${a.side}">${esc(anchorLabel(a))}<button type="button" data-drop="${i}" aria-label="remove">×</button></span>`).join("");
+    ? `<span class="chip-loc live" data-ref="${esc(S.live.path + ":" + S.live.range)}" data-side="${S.live.side}" data-commit="${esc(S.live.commit || "")}" title="Your current selection; it goes with the next message. Pin it with Ask to keep it after you deselect.">${esc(anchorLabel(S.live))}<button type="button" data-drop="live" aria-label="deselect">×</button></span>` : "";
+  $("#anchors").innerHTML = live + S.anchors.map((a, i) => `<span class="chip-loc" data-ref="${esc(a.path + ":" + a.range)}" data-side="${a.side}" data-commit="${esc(a.commit || "")}">${esc(anchorLabel(a))}<button type="button" data-drop="${i}" aria-label="remove">×</button></span>`).join("");
 }
 
 function outgoingAnchors() {
@@ -914,7 +1063,7 @@ function syncExecSel() {
 const VIA = { "hook:tool": "while it was working", "hook:stop": "as it finished a reply", "hook:prompt": "with your next message to it", watch: "by waking it" };
 function ago(t) {
   const s = Math.max(0, Math.round(Date.now() / 1000 - t));
-  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 172800 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
 }
 function renderDelivery() {
   const d = S.state.delivery || { state: "idle" }, el = $("#delivery");
@@ -941,12 +1090,15 @@ async function refresh() {
   if (first || st.session.reloaded !== S.reloaded) {
     const again = !first && S.reloaded !== st.session.reloaded;
     S.reloaded = st.session.reloaded;
-    S.manifest = await api("manifest").catch(() => ({ files: [] }));
-    S.byPath = new Map((S.manifest.files || []).map((f) => [f.path, f]));
-    S.diffs.clear(); S.files.clear();
-    renderTree();
+    const known = new Set(S.commits.entries.map((e) => e.id));
+    S.all = await api("manifest").catch(() => ({ files: [] }));
+    S.commits = await api("commits").catch(() => ({ entries: [], uncommitted: null }));
+    S.views.clear(); S.diffs.clear(); S.files.clear();
+    if (first) S.commit = rememberedCommit();
+    await setCommit(viewIds().includes(S.commit) ? S.commit : "all", { quiet: true });
+    const added = again ? S.commits.entries.filter((e) => !known.has(e.id)) : [];
     $("#title").textContent = st.session.title || "Review";
-    const m = S.manifest;
+    const m = S.all;
     const pr = st.session.pr, meta = $("#meta");
     meta.textContent = [pr ? "" : st.session.repo && st.session.repo.split("/").pop(), m.base_label && `vs ${m.base_label}`].filter(Boolean).join(" · ");
     if (pr) {
@@ -959,7 +1111,11 @@ async function refresh() {
     }
     const story = $("#story");
     if (first) story.src = `/s/${D.sid}/story?t=${encodeURIComponent(D.token)}`;
-    else if (again) { story.contentWindow.location.reload(); if (S.active !== "story") renderCode(); toast("Summary and diffs reloaded"); }
+    else if (again) {
+      story.contentWindow.location.reload();
+      if (S.active !== "story") renderCode();
+      toast(added.length ? `${added.length} new commit${added.length === 1 ? "" : "s"}: ${added.map((e) => e.short).join(", ")}` : "Summary and diffs reloaded");
+    }
   }
   S.draft = st.draft || null;
   syncPages(first);
@@ -1064,7 +1220,7 @@ async function openPage(ref) {
 // An editor link from the Story page or a page: a repository file opens in the editor, an .html file
 // opens as a page, anything else goes to the external editor as before.
 function openHref(href, title = "") {
-  const root = (S.manifest.link_root || "").replace(/\/$/, "");
+  const root = (S.all.link_root || "").replace(/\/$/, "");
   const m = href.match(/^(?:vscode|cursor|windsurf|zed):\/\/file(\/[^:]+)(?::(\d+))?/) || href.match(/^file:\/\/(\/[^?#]+)$/);
   if (!m) return false;
   const abs = decodeURIComponent(m[1]);
@@ -1073,7 +1229,7 @@ function openHref(href, title = "") {
   const path = abs.slice(root.length + 1);
   const line = m[2] || (title.match(/:(\d+)/) || [])[1];
   const span = (title.match(/:(\d+)-(\d+)$/) || []);
-  openFile(path, { range: line ? (span[2] ? `${span[1]}-${span[2]}` : `${line}`) : null, view: line && !S.byPath.has(path) ? "file" : undefined });
+  openRef({ path, range: line ? (span[2] ? `${span[1]}-${span[2]}` : `${line}`) : null }, { view: line ? undefined : "diff" });
   return true;
 }
 
@@ -1089,8 +1245,9 @@ function onLocClick(e) {
   if (!el || e.target.closest("[data-drop]")) return;
   e.preventDefault();
   const ref = parseRef(el.dataset.ref);
-  // a line outside the diff is only visible in the whole-file view
-  openFile(ref.path, { range: ref.range, side: el.dataset.side || "new", view: S.byPath.has(ref.path) ? undefined : "file" });
+  if (el.dataset.side) ref.side = el.dataset.side;
+  if (el.dataset.commit !== undefined) ref.commit = el.dataset.commit || null;
+  openRef(ref);
 }
 
 function wireStory() {
@@ -1113,8 +1270,7 @@ function wireStory() {
     if (d.desk === "ask" && (e.source === fr.contentWindow || $$("#panes .page-frame").some((f) => f.contentWindow === e.source))) return askFromPage(d);
     if (!$$("#panes .page-frame").some((f) => f.contentWindow === e.source)) return;
     if (d.desk === "ref" && typeof d.ref === "string" && /^[\w.\/@+-]+(:\d+(-\d+)?)?$/.test(d.ref)) {
-      const ref = parseRef(d.ref);
-      return openFile(ref.path, { range: ref.range, view: S.byPath.has(ref.path) ? undefined : "file" });
+      return openRef(parseRef(d.ref));
     }
     if (d.desk !== "open" || typeof d.href !== "string") return;
     // outside the repo: hand it to the external editor, but never follow anything but an editor scheme
@@ -1152,7 +1308,7 @@ function wire() {
     if (f) f.src = f.src;  // the sandboxed frame's own location is not ours to reload
   });
   $("#tb-render").addEventListener("click", () => {
-    const root = S.manifest.link_root || (S.state && S.state.session.repo) || "";
+    const root = S.all.link_root || (S.state && S.state.session.repo) || "";
     openPage(`${root}/${S.active}`);
   });
   $("#tree").addEventListener("click", (e) => {
@@ -1577,7 +1733,7 @@ function closeSearch(restore = true) {
 function searchOpts() {
   ["case", "word", "regex"].forEach((k) => $(`#search [data-sopt=${k}]`).setAttribute("aria-pressed", String(SR[k])));
   $$("#search [data-scope]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scope === SR.scope)));
-  const n = (S.manifest.files || []).filter((f) => f.badge !== "D").length;
+  const n = (S.all.files || []).filter((f) => f.badge !== "D").length;
   $("#s-q").placeholder = SR.scope === "repo" ? "Search the repository" : `Search ${n} changed file${n === 1 ? "" : "s"}`;
 }
 
@@ -1722,7 +1878,7 @@ async function openHit(el, preview) {
   if (!hit) return;
   const path = hit.dataset.path, line = +hit.dataset.line;
   if (!preview) closeSearch(false);
-  await openFile(path, { range: String(line) });
+  await openRef({ path, range: String(line) });  // search reads the working tree
   if (S.active !== path) return;
   Object.assign(F, { q: SR.q, case: SR.case, word: SR.word, regex: SR.regex, open: true });
   ["case", "word", "regex"].forEach((k) => $(`#find [data-find=${k}]`).setAttribute("aria-pressed", String(F[k])));
@@ -2077,6 +2233,7 @@ function recoverFromOutage() {
 }
 
 wire();
+wirePicker();
 wireFind();
 wireSearch();
 wireLayout();

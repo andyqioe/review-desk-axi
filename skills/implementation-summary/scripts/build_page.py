@@ -196,7 +196,8 @@ def write_review_data(b: "Builder", out: Path) -> int:
                       "badge": STATUS_BADGE.get(fc.status, fc.status), "origins": fc.origins, "adds": fc.adds,
                       "dels": fc.dels, "binary": fc.binary, "notes": [x for x in fc.notes() if not x.startswith("from ")],
                       "hunks": hunks, "cited": fc.path in b.referenced or (fc.old_path or "") in b.referenced})
-    manifest = {"repo": str(b.repo), "link_root": str(b.link_root), "base_label": b.cs.base_label,
+    # base: what the desk's commit picker counts the review's commits from (base..HEAD)
+    manifest = {"repo": str(b.repo), "link_root": str(b.link_root), "base_label": b.cs.base_label, "base": b.cs.base,
                 "scope": b.cs.scope, "files": files}
     tmp = out / ".manifest.json.tmp"
     tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")

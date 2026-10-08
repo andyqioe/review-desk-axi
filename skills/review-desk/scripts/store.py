@@ -10,6 +10,7 @@ dead server never blocks a reviewer and a killed reviewer never loses what it lo
     session.json   sid, title, repo, page, token, status          (atomic rewrite)
     context.md     the reviewer's compact briefing                 (written once by `open`)
     manifest.json  changed files + hunk map; diffs/<n>.json rows  (written by build_page --review-data)
+    commits/       one change set per commit, and the uncommitted rest, for the commit picker (gitdiff.py)
     chat.jsonl     every message and control event, with a seq    (append + fsync)
     backlog.jsonl  backlog events folded into items                (append + fsync)
     tray.jsonl     files/ranges the agent pinned into the editor   (append + fsync)
@@ -51,7 +52,7 @@ def home() -> Path:
     return Path(os.environ.get("REVIEW_DESK_HOME") or Path.home() / ".review-desk").expanduser()
 
 
-SERVER_CODE = ("server.py", "store.py")  # the Python a running server has loaded; assets are read per request
+SERVER_CODE = ("server.py", "store.py", "gitdiff.py")  # the Python a running server has loaded; assets are read per request
 
 
 def code_id() -> str:
@@ -62,6 +63,14 @@ def code_id() -> str:
     for name in SERVER_CODE:
         h.update((Path(__file__).resolve().parent / name).read_bytes())
     return h.hexdigest()[:16]
+
+
+def anchor_ref(a: dict) -> str:
+    """An anchor as agents read it: [old:]path[:a-b][@<commit>]. With @<commit> the lines are as of that
+    commit (on the old side, as of its parent), because the user flagged them in that commit's view;
+    without it they are the working tree's (the base's, on the old side)."""
+    ref = f"{'old:' if a.get('side') == 'old' else ''}{a['path']}" + (f":{a['range']}" if a.get("range") else "")
+    return ref + (f"@{a['commit'][:10]}" if a.get("commit") else "")
 
 
 def now() -> float:

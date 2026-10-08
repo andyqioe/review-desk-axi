@@ -51,6 +51,13 @@ review-desk-axi add <sid> src/x.py:40-72 tests/test_x.py --note "start here"   #
 `open` prints the session id, the URL (it opens the browser once) and the last model/effort the user chose.
 `add` is how you put files in front of the user: each ref appears under "pinned by agent" and opens as a tab; `--focus` jumps to it.
 
+## Commits
+
+The desk splits a review into its commits: a picker above the file list offers "All changes", each commit since the review's base, and "Uncommitted".
+The base is pinned at `open` (HEAD, `--base`, the summary's base, or a PR's merge-base), so committing during the review never shrinks "All changes".
+After you commit more work, `review-desk-axi reload <sid>` appends the new commits (`commits: ... appended <sha>`); `status` lists the count.
+An anchor ending in `@<sha>` (`src/x.py:40-42@a16f7de9c1`) is lines as of that commit, flagged in its view: read them with `git show <sha>:<path>`, and apply the intent where the code is now.
+
 ## Review a GitHub pull request
 
 When the user gives a PR link, open the desk on the PR instead of the working tree, from the directory you are in:
@@ -182,7 +189,7 @@ Ask the model/effort question in plain text where AskUserQuestion does not exist
 - `scripts/store.py` - session files, fsync'd appends under an flock, backlog fold, page open/close fold, reviewer presence.
 - `scripts/server.py` - loopback server for the editor (`127.0.0.1:4388`, `REVIEW_DESK_PORT`); token-gated, refuses cross-origin POSTs, exits after 30 idle minutes.
   Pages are served from `/s/<sid>/view/<key>/<page id>/<file>` with a separate read-only key.
-- `scripts/gitdiff.py` - review data from plain `git diff` when no `manifest.json` exists.
+- `scripts/gitdiff.py` - review data from plain `git diff` when no `manifest.json` exists, and `commits/` (one change set per commit, plus the uncommitted rest) for the commit picker.
 - `scripts/ghpr.py` - pull requests: link parsing, `gh` metadata and discussion, the PR worktree, the PR page, and `pr post` reviews.
 - `scripts/search.py` - the Cmd+Shift+F engine: ripgrep (or git grep) runs, biggrep's path filter and previews, streamed records.
 - `scripts/install_agents.py` - writes the reviewer agents from `agents/reviewer.md.tmpl`; rerun after editing the template (`--check` reports drift).

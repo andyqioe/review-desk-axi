@@ -17,6 +17,7 @@ import mimetypes
 import os
 import re
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import store  # noqa: E402
+from gitdiff import COMMIT_ID, UNCOMMITTED  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 CODE_ID = store.code_id()  # fixed at start: what this process runs, even after the files change
@@ -38,18 +40,33 @@ CLIENTS_LOCK = threading.Lock()
 LAST_ACTIVITY = [time.time()]
 
 
-def excerpt(s: store.Session, path: str, rng: str | None, side: str = "new", limit: int = 40) -> str:
-    """First lines of an anchor, from the file on disk (new side) or the diff rows (old side)."""
+def commit_dir(s: store.Session, c: str | None) -> Path | None:
+    """The folder of one entry of the commit picker (a commit's sha, or "uncommitted"), if the desk listed it."""
+    if not isinstance(c, str) or not (c == UNCOMMITTED or COMMIT_ID.match(c)):
+        return None
+    d = s.dir / "commits" / c
+    return d if (d / "manifest.json").is_file() else None
+
+
+def is_commit(c) -> bool:
+    """A view whose lines are a commit's, not the working tree's ("All changes" and "uncommitted" are the tree's)."""
+    return isinstance(c, str) and c != UNCOMMITTED and bool(COMMIT_ID.match(c))
+
+
+def excerpt(s: store.Session, path: str, rng: str | None, side: str = "new", limit: int = 40, commit: str | None = None) -> str:
+    """First lines of an anchor: from the file (on disk, or as of `commit`) for the new side, from the diff
+    rows for the old side."""
     m = re.fullmatch(r"(\d+)(?:-(\d+))?", rng or "")
     if not m:
         return ""
     a, b = int(m[1]), int(m[2] or m[1])
     if side == "old":
-        f = next((f for f in s.manifest().get("files", []) if f["path"] == path), None)
-        rows = (store.read_json(s.dir / "diffs" / f"{f['n']}.json", {}) or {}).get("rows", []) if f else []
+        view = commit_dir(s, commit) or s.dir
+        f = next((f for f in (store.read_json(view / "manifest.json", {}) or {}).get("files", []) if f["path"] == path), None)
+        rows = (store.read_json(view / "diffs" / f"{f['n']}.json", {}) or {}).get("rows", []) if f else []
         lines = [f"{r[0]}  {r[2]}" for r in rows if r[0] and a <= int(r[0]) <= b]
         return "\n".join(lines[:limit])
-    lines = repo_lines(s, path)
+    lines = lines_at(s, path, commit)
     if lines is None:
         return ""
     return "\n".join(f"{n}  {lines[n - 1]}" for n in range(a, min(b, len(lines), a + limit - 1) + 1))
@@ -73,6 +90,28 @@ def repo_lines(s: store.Session, rel: str) -> list[str] | None:
     return p.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
+def commit_lines(s: store.Session, sha: str, rel: str) -> list[str] | None:
+    """A file as of a commit the desk listed: the same containment and size rules as the working tree."""
+    rp = Path(rel)
+    if not rel or rp.is_absolute() or ".." in rp.parts or commit_dir(s, sha) is None:
+        return None
+    repo = s.meta().get("repo", "/")
+    spec = f"{sha}:{rel}"
+    probe = subprocess.run(["git", "-C", repo, "cat-file", "--batch-check=%(objecttype) %(objectsize)"],
+                           input=spec + "\n", capture_output=True, text=True, check=False)
+    kind, _, size = probe.stdout.strip().partition(" ")
+    if probe.returncode or kind != "blob" or int(size) > MAX_FILE:
+        return None
+    data = subprocess.run(["git", "-C", repo, "cat-file", "blob", spec], capture_output=True, check=True).stdout
+    if b"\0" in data[:8000]:  # git's own binary heuristic, as for untracked files
+        return None
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
+def lines_at(s: store.Session, rel: str, commit: str | None) -> list[str] | None:
+    return commit_lines(s, commit, rel) if is_commit(commit) else repo_lines(s, rel)
+
+
 def tier_guard(s: store.Session, model: str | None, effort: str | None) -> None:
     """A user entry for a different tier than the live reviewer's first asks that reviewer to hand over."""
     if not model:
@@ -90,13 +129,15 @@ def clean_anchors(s: store.Session, anchors) -> list[dict]:
             continue
         side = "old" if a.get("side") == "old" else "new"
         rng = str(a.get("range") or "")
+        # lines picked in one commit's view are that commit's; the working tree's may have moved since
+        commit = a.get("commit") if is_commit(a.get("commit")) and commit_dir(s, a.get("commit")) else None
         out.append({"path": str(a["path"]), "range": rng or None, "side": side,
-                    "excerpt": excerpt(s, a["path"], rng, side)})
+                    "excerpt": excerpt(s, a["path"], rng, side, commit=commit), **({"commit": commit} if commit else {})})
     return out
 
 
-def make_patch(s: store.Session, path: str, rng: str, replacement: str) -> str | None:
-    lines = repo_lines(s, path)
+def make_patch(s: store.Session, path: str, rng: str, replacement: str, commit: str | None = None) -> str | None:
+    lines = lines_at(s, path, commit)
     m = re.fullmatch(r"(\d+)(?:-(\d+))?", rng or "")
     if lines is None or not m:
         return None
@@ -278,14 +319,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(state(s))
         if rest == "skills":
             return self.json({"skills": skill_list()})
+        # ?c=<sha|uncommitted> picks one entry of the commit picker; without it, "All changes"
+        view = s.dir
+        if q.get("c"):
+            view = commit_dir(s, q["c"])
+            if view is None:
+                return self.fail(404, "no such commit in this review")
+        if rest == "commits":
+            return self.json(store.read_json(s.dir / "commits" / "index.json") or {"entries": [], "uncommitted": None})
         if rest == "manifest":
-            return self.json(s.manifest())
+            return self.json(store.read_json(view / "manifest.json", {"files": []}) or {"files": []})
         if rest.startswith("diff/"):
             n = rest[5:]
-            data = store.read_json(s.dir / "diffs" / f"{n}.json") if n.isdigit() else None
+            data = store.read_json(view / "diffs" / f"{n}.json") if n.isdigit() else None
             return self.json(data) if data is not None else self.fail(404, "no diff")
         if rest == "file":
-            lines = repo_lines(s, q.get("path", ""))
+            lines = lines_at(s, q.get("path", ""), q.get("c"))
             if lines is None:
                 return self.fail(404, "file not readable in repo")
             return self.json({"path": q["path"], "lines": lines})
@@ -441,10 +490,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(400, "anchor required")
             a = anchors[0]
             note = str(body.get("note", "")).strip()
-            spec = f"{a['path']}:{a['range']}" if a.get("range") else a["path"]
+            spec = store.anchor_ref({**a, "side": "new"})
             patch = None
             if rest == "suggest":
-                patch = make_patch(s, a["path"], a.get("range") or "", str(body.get("replacement", "")))
+                patch = make_patch(s, a["path"], a.get("range") or "", str(body.get("replacement", "")), a.get("commit"))
                 if patch is None:
                     return self.fail(400, "cannot build a patch for that range")
                 if not patch:

@@ -181,6 +181,21 @@ When tabs overflow, the hidden edge fades, the mouse wheel scrolls the strip sid
 Drag a tab to reorder it (Story stays first), or use Alt+Shift+←/→.
 Drop a file from the tree onto the strip to open it at that position.
 
+### Commits
+
+When the review is made of commits, a picker above the file list splits it into them instead of folding everything into one diff.
+It lists **All changes**, each commit since the review's base (oldest first, with its subject, author and line counts), and **Uncommitted** when the working tree has more.
+Picking one scopes the file list, the diffs and the file view to it: a commit's file view shows the file as of that commit.
+Step through them with the ‹ › buttons or `[` and `]`.
+
+![The commit picker on the second of four commits](docs/screenshots/commits.png)
+
+The base is pinned when the desk opens (HEAD, `--base`, a summary's base, or a PR's merge-base), so work the agent commits during the review is appended as new commits at the next `reload` instead of disappearing from the diff.
+A commit's diff is computed once and kept; the desk says which commits a reload added.
+Lines you select or flag in a commit's view carry that commit (`src/x.py:40-42@a16f7de9c1`), so the reviewer and the main agent read the lines you saw, not the working tree's.
+A reference written against the working tree (a pin, a search hit, a summary link) switches the picker back to All changes.
+Merge commits are left out of the list, and only the newest 100 commits are listed; both stay in All changes.
+
 ### Select, analyze, flag, suggest
 
 Select lines by dragging across the line numbers (Shift+click extends), or by selecting text.
@@ -281,6 +296,8 @@ Skills that build pages with a script (analyze-code's figure generator, for one)
 | ←, → | search results | fold, unfold a file |
 | Enter, Space | search results | open, preview |
 | Cmd/Ctrl+B | anywhere | hide or show the files panel |
+| `[`, `]` | outside a text field | previous, next commit |
+| ↑/↓, j/k, Enter, Esc | commit picker | move, pick, close |
 | Alt+Shift+←/→ | focused tab | move the tab |
 | Delete, middle-click | tab | close the tab |
 | Enter (Shift+Enter for a newline) | composer | send |
@@ -323,7 +340,7 @@ Every command except `open` and `url` works with the server down, because disk i
 | `backlog <sid> ack\|done\|dismiss\|reopen <ids> [--note N]` | track and close items |
 | `page <sid> open <file.html> [--title T] [--background]`, `close <id>`, `list` | HTML pages as read-only tabs |
 | `run <sid> -- <command...>` | run a page generator with writes confined to the pages folder |
-| `reload <sid> [--page P]` | refresh the browser after a rebuild; recompute git diffs |
+| `reload <sid> [--page P]` | refresh the browser after a rebuild; recompute git diffs and append new commits to the picker |
 | `status <sid>`, `url <sid>`, `end <sid>`, `prefs [--model M --effort E]` | inspect, reopen, close, set defaults |
 | `setup [hooks\|bin\|agents\|all]` | install the hooks, the PATH link and the fallback agents |
 
@@ -369,7 +386,7 @@ skills/review-desk/                     the desk (this README)
   scripts/server.py                     loopback HTTP server: the desk, the API, SSE, search, pages
   scripts/search.py                     Cmd+Shift+F engine: ripgrep (or git grep), path filter, previews
   scripts/reviewer_host.py              the long-lived claude -p reviewer, in-place model and effort switches
-  scripts/gitdiff.py                    review data from plain git diff when no manifest exists
+  scripts/gitdiff.py                    review data from plain git diff, and one change set per commit
   scripts/install_agents.py             writes the fallback reviewer agents from agents/reviewer.md.tmpl
   agents/host-reviewer.md               the reviewer host's instructions
   assets/desk.{html,css,js}             the editor; no build step
@@ -380,7 +397,7 @@ skills/analyze-code/                    call lineage analysis, figure generator 
 .github/workflows/                      CI on macOS and Linux, release-please
 ```
 
-A session directory holds `session.json`, `context.md` (the reviewer's briefing), `manifest.json` and `diffs/`, and the append-only `chat.jsonl`, `backlog.jsonl`, `tray.jsonl` and `pages.jsonl`.
+A session directory holds `session.json`, `context.md` (the reviewer's briefing), `manifest.json` and `diffs/`, `commits/` (one change set per commit and the uncommitted rest), and the append-only `chat.jsonl`, `backlog.jsonl`, `tray.jsonl` and `pages.jsonl`.
 The session store defaults to `~/.review-desk/`.
 
 ## Tests and evals

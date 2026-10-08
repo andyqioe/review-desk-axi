@@ -71,7 +71,7 @@ def describe(e: dict) -> str:
     if e.get("model"):
         head += f" [{e['model']}/{e.get('effort', '?')}]"
     for a in e.get("anchors", []):
-        head += f" @{'old:' if a.get('side') == 'old' else ''}{a['path']}" + (f":{a['range']}" if a.get("range") else "")
+        head += f" @{store.anchor_ref(a)}"
     if e.get("item"):
         head += f" (backlog {e['item']})"
     lines = [head, e.get("text", "")]

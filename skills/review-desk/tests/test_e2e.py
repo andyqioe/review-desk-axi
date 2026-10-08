@@ -6,6 +6,7 @@ Each test class gets its own REVIEW_DESK_HOME and port, so nothing touches ~/.re
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -811,6 +812,9 @@ class PullRequestTest(Desk):
         self.assertEqual(git_in(wt, "rev-parse", "HEAD"), self.head)
         self.assertEqual(set(self.files()), {"src/app.py", "src/new.py"}, "vs the merge-base: main's later README commit is not in the PR")
         self.assertEqual(self.session().manifest()["base_label"], "main")
+        # the commit picker lists the PR's own commit, counted from the merge-base like the diff
+        idx = json.loads((self.session().dir / "commits" / "index.json").read_text())
+        self.assertEqual([(e["id"], e["subject"], e["files"]) for e in idx["entries"]], [(self.head, "the PR", 2)])
         # the user's clone: same branch, edit intact, no worktree checkout in it
         self.assertEqual(git_in(self.repo, "branch", "--show-current"), "my-branch")
         self.assertEqual((self.repo / "README.md").read_text(), "my uncommitted edit\n")
@@ -938,6 +942,88 @@ class PullRequestTest(Desk):
         self.assertIn("does not review a pull request", out)
 
 
+class CommitPickerTest(Desk):
+    """Work committed while a desk is open is appended as commits; it never folds into one diff or vanishes."""
+
+    def git(self, *a) -> str:
+        return subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True, text=True).stdout.strip()
+
+    def session(self):
+        import store
+        return store.open_session(self.sid)
+
+    def index(self) -> dict:
+        return json.loads((self.session().dir / "commits" / "index.json").read_text())
+
+    def test_1_commits_append_and_all_changes_keeps_the_pinned_base(self):
+        base = self.git("rev-parse", "HEAD")
+        self.assertEqual(self.session().meta()["commit_base"], base)
+        self.assertEqual(self.index()["entries"], [])  # nothing committed yet: "All changes" is the uncommitted work
+        self.git("add", "-A")
+        self.git("commit", "-qm", "Parse rows with csv")
+        first = self.git("rev-parse", "HEAD")
+        out = self.rd("reload", self.sid)
+        self.assertIn("1 since", out)
+        (self.repo / "src" / "new.py").write_text("X = 1\nY = 3\nZ = 4\n")
+        self.git("commit", "-qam", "Bump Y, add Z")
+        second = self.git("rev-parse", "HEAD")
+        (self.repo / "src" / "later.py").write_text("L = 1\n")
+        out = self.rd("reload", self.sid)
+        self.assertIn(f"appended {second[:7]}", out)
+        idx = self.index()
+        self.assertEqual([e["id"] for e in idx["entries"]], [first, second])
+        self.assertEqual([e["subject"] for e in idx["entries"]], ["Parse rows with csv", "Bump Y, add Z"])
+        self.assertEqual(idx["uncommitted"]["files"], 1)
+        # "All changes" is still everything since the base the desk pinned at open, not just the new HEAD's diff
+        self.assertEqual({f["path"] for f in self.session().manifest()["files"]}, {"src/parse.py", "src/new.py", "src/later.py"})
+        code, m = self.http("GET", f"/api/{self.sid}/manifest?c={second}")
+        self.assertEqual((code, [f["path"] for f in m["files"]]), (200, ["src/new.py"]))
+        code, d = self.http("GET", f"/api/{self.sid}/diff/1?c={second}")
+        self.assertEqual([r[2] for r in d["rows"] if r[3] == "add"], ["Y = 3", "Z = 4"])
+        code, m = self.http("GET", f"/api/{self.sid}/manifest?c=uncommitted")
+        self.assertEqual([f["path"] for f in m["files"]], ["src/later.py"])
+        code, idx2 = self.http("GET", f"/api/{self.sid}/commits")
+        self.assertEqual(idx2["entries"], idx["entries"])
+        # a commit's folder is written once: reloading again reuses it
+        folder = self.session().dir / "commits" / first / "manifest.json"
+        before = folder.stat().st_mtime_ns
+        self.rd("reload", self.sid)
+        self.assertEqual(folder.stat().st_mtime_ns, before)
+        self.assertIn("2 since", self.rd("status", self.sid))
+
+    def test_2_file_view_and_anchors_are_as_of_the_picked_commit(self):
+        first = self.index()["entries"][0]["id"]
+        code, f = self.http("GET", f"/api/{self.sid}/file?path=src/new.py&c={first}")
+        self.assertEqual((code, f["lines"]), (200, ["X = 1", "Y = 2"]))  # the working tree says Y = 3
+        for bad in (f"file?path=../x&c={first}", "file?path=src/new.py&c=" + "0" * 40, "manifest?c=HEAD", "diff/1?c=..%2F..%2Fx"):
+            self.assertEqual(self.http("GET", f"/api/{self.sid}/{bad}")[0], 404, bad)
+        code, r = self.http("POST", f"/api/{self.sid}/flag", {"anchor": {"path": "src/new.py", "range": "2", "side": "new", "commit": first}, "note": "Y was 2 here"})
+        self.assertEqual(code, 200, r)
+        e = self.session().chat()[-1]
+        self.assertEqual((e["anchors"][0]["commit"], e["anchors"][0]["excerpt"]), (first, "2  Y = 2"))
+        item = next(i for i in self.session().backlog() if i["id"] == r["item"])
+        self.assertEqual(item["anchor"], f"src/new.py:2@{first[:10]}")
+        self.assertIn(f"src/new.py:2@{first[:10]}", self.rd("chat", self.sid, str(e["seq"])))
+        # a suggested edit on a commit's lines is a patch against that commit's version
+        code, r = self.http("POST", f"/api/{self.sid}/suggest", {"anchor": {"path": "src/new.py", "range": "2", "side": "new", "commit": first}, "replacement": "Y = 20"})
+        self.assertEqual(code, 200, r)
+        patch = next(i for i in self.session().backlog() if i["id"] == r["item"])["patch"]
+        self.assertIn("-Y = 2\n+Y = 20", patch)
+        # an anchor naming a commit the desk never listed is the working tree's
+        code, r = self.http("POST", f"/api/{self.sid}/flag", {"anchor": {"path": "src/new.py", "range": "2", "side": "new", "commit": "f" * 40}})
+        e = self.session().chat()[-1]
+        self.assertNotIn("commit", e["anchors"][0])
+        self.assertEqual(e["anchors"][0]["excerpt"], "2  Y = 3")
+
+    def test_3_desk_carries_the_picker(self):
+        page = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/s/{self.sid}?t={self.token}", timeout=5).read().decode()
+        for needle in ('id="commit-pick"', 'id="cp-btn"', 'id="cp-menu"', 'id="cp-prev"', 'id="cp-next"'):
+            self.assertIn(needle, page)
+        js = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/desk.js", timeout=5).read().decode()
+        for needle in ("function setCommit(", "function openRef(", "manifest?c=", "withCommit("):
+            self.assertIn(needle, js)
+
+
 class GitDiffTest(unittest.TestCase):
     def test_untracked_symlinks_and_binaries_open(self):
         import gitdiff
@@ -1034,6 +1120,38 @@ class ImplementationSummaryTest(unittest.TestCase):
             subprocess.run([sys.executable, str(IMPL), "--repo", str(repo), "--body", str(body), "--title", "T",
                             "--review-data", str(rd), "--editor", "none"], env=env, capture_output=True, text=True, check=True)
             self.assertTrue((rd / "session.json").exists())
+
+    def test_desk_lists_a_feature_branchs_commits_from_the_summarys_base(self):
+        """build_page diffs a feature branch against its merge-base with main; the desk's picker counts from there."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = make_repo(root)
+            g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()  # noqa: E731
+            g("branch", "-M", "main")
+            g("checkout", "-qb", "feature")
+            g("add", "-A")
+            g("commit", "-qm", "one")
+            (repo / "src" / "new.py").write_text("X = 1\nY = 2\nZ = 3\n")
+            g("commit", "-qam", "two")
+            body = root / "body.html"
+            body.write_text('<header class="hero"><h1>x</h1></header>')
+            port = free_port()
+            env = {**os.environ, "IMPL_SUMMARY_ROOT": str(root / "archive"), "REVIEW_DESK_HOME": str(root / "home"),
+                   "REVIEW_DESK_PORT": str(port), "REVIEW_DESK_NO_OPEN": "1"}
+            out = subprocess.run([sys.executable, str(IMPL), "--repo", str(repo), "--body", str(body), "--title", "T",
+                                  "--review-data", "--editor", "none"], env=env, capture_output=True, text=True, check=True).stdout
+            rd = Path(out.split("review data: ")[1].split(" (")[0])
+            self.assertEqual(json.loads((rd / "manifest.json").read_text())["base"], g("merge-base", "HEAD", "main"))
+            try:
+                out = subprocess.run([*CLI, "open", "--dir", str(rd), "--title", "T", "--repo", str(repo)], env=env,
+                                     capture_output=True, text=True, check=True).stdout
+                self.assertIn("2 since", out)
+                idx = json.loads((rd / "commits" / "index.json").read_text())
+                self.assertEqual([e["subject"] for e in idx["entries"]], ["one", "two"])
+            finally:
+                # no server came up: nothing to stop
+                with contextlib.suppress(OSError, ValueError, KeyError), urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as r:
+                    os.kill(json.loads(r.read())["pid"], signal.SIGTERM)
 
 
 if __name__ == "__main__":

@@ -143,8 +143,7 @@ def tier_of(e: dict) -> str:
 
 
 def anchors_of(e: dict) -> str:
-    return " ".join(f"{'old:' if a.get('side') == 'old' else ''}{a['path']}" + (f":{a['range']}" if a.get("range") else "")
-                    for a in e.get("anchors", []))
+    return " ".join(store.anchor_ref(a) for a in e.get("anchors", []))
 
 
 def event_row(e: dict, sid: str, full: bool = True) -> dict:
@@ -316,6 +315,49 @@ def gitdiff_write(s: store.Session, repo: Path, base: str, paths: list[str] | No
         raise DeskError(f"git diff failed in {repo}: {e.stderr.strip() if e.stderr else e}", ["Pass --repo <git checkout>"])
 
 
+def commit_base(s: store.Session) -> str | None:
+    """The commit a review's commits are counted from. It is pinned the first time the desk sees the review,
+    so work committed later is appended as new commits instead of moving the base and vanishing from the
+    diff; a PR desk follows its merge-base, which reopening recomputes."""
+    import gitdiff
+    m, meta = s.manifest(), s.meta()
+    repo = Path(m.get("repo") or meta.get("repo") or ".")
+    if meta.get("pr"):
+        return gitdiff.rev(repo, m.get("base") or "HEAD")
+    if meta.get("commit_base"):
+        return meta["commit_base"]
+    sha = gitdiff.rev(repo, m.get("base") or "HEAD")
+    if sha:
+        s.update_meta(commit_base=sha)
+    return sha
+
+
+def sync_commits(s: store.Session) -> dict | None:
+    """Split the review into its commits for the desk's picker; None outside a git checkout."""
+    import gitdiff
+    m = s.manifest()
+    repo = Path(m.get("repo") or s.meta().get("repo") or ".")
+    try:
+        return gitdiff.sync_commits(repo, s.dir, commit_base(s), m.get("paths") or m.get("scope") or None)
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+def commits_line(index: dict | None) -> str:
+    if not index or not index.get("base"):
+        return "none (not a git checkout with commits)"
+    n = len(index.get("entries", []))
+    parts = [f"{n} since {index['base'][:10]}"]
+    if index.get("uncommitted"):
+        k = index["uncommitted"]["files"]
+        parts.append(f"plus uncommitted ({k} file{'s' if k != 1 else ''})")
+    if index.get("omitted"):
+        parts.append(f"{index['omitted']} older not listed")
+    if index.get("merges"):
+        parts.append(f"{index['merges']} merge commits not listed")
+    return ", ".join(parts)
+
+
 def open_pr(a) -> tuple[store.Session, dict]:
     """A GitHub PR as a session: one per PR (reopening refreshes it), its head in a worktree of its own."""
     import ghpr
@@ -352,7 +394,13 @@ def cmd_open(a) -> int:
         page = str(Path(a.page).resolve()) if a.page else None
         s = store.create(directory, title=a.title or "Review", repo=str(repo), page=page, editor=a.editor)
         if not s.manifest_path.exists():
-            gitdiff_write(s, repo, a.base or "HEAD", a.paths)
+            import gitdiff
+            base = a.base or "HEAD"
+            sha = gitdiff.rev(repo, base)  # pinned: committing more work appends commits, it never moves the base
+            if sha:
+                s.update_meta(commit_base=sha)
+            gitdiff_write(s, repo, sha or base, a.paths, a.base or (f"{sha[:10]} (HEAD at open)" if sha else None))
+    commits = sync_commits(s)
     build_context(s, Path(a.summary) if a.summary else None, Path(a.notes) if a.notes else None)
     h = ensure_server()
     url = url_for(s)
@@ -372,6 +420,7 @@ def cmd_open(a) -> int:
     kv("browser", browser)
     kv("dir", tilde(s.dir))
     kv("files", len(s.manifest().get("files", [])))
+    kv("commits", commits_line(commits))
     kv("context", f"{tilde(s.context_path)} ({len(s.context_path.read_text().splitlines())} lines)")
     kv("last_tier", f"{p.get('model', 'haiku')}/{p.get('effort', 'low')}")
     help_block([run(f'add {s.sid} <path:a-b> --note "<why read this first>"') + " to pin the 1-3 code moments",
@@ -798,6 +847,8 @@ def cmd_status(a) -> int:
     kv("title", m.get("title"))
     if m.get("pr"):
         kv("pr", f"{m['pr']['url']} (head {m['pr']['head_sha'][:10]}, worktree {tilde(Path(m['pr']['worktree']))})")
+    if (s.dir / "commits" / "index.json").exists():
+        kv("commits", commits_line(store.read_json(s.dir / "commits" / "index.json")))
     kv("reviewer", f"{p['state']} {p.get('model') or '-'}/{p.get('effort') or '-'}" + (f" (exited: {p['reason']})" if p.get("reason") else ""))
     kv("wanted_tier", f"{w.get('model', '-')}/{w.get('effort', '-')}")
     kv("unanswered", len(s.unanswered()))
@@ -835,8 +886,13 @@ def cmd_reload(a) -> int:
         fields["page"] = str(Path(a.page).resolve())
     m = s.manifest()
     if m.get("source") == "git":  # opened without implementation-summary: recompute the diffs ourselves
-        n = gitdiff_write(s, Path(m["repo"]), m.get("base") or "HEAD", m.get("paths") or None, m.get("base_label"))
+        n = gitdiff_write(s, Path(m["repo"]), commit_base(s) or m.get("base") or "HEAD", m.get("paths") or None, m.get("base_label"))
         kv("diffs", f"recomputed from git ({n} files)")
+    known = store.read_json(s.dir / "commits" / "index.json")
+    before = {e["id"] for e in (known or {}).get("entries", [])}
+    index = sync_commits(s)
+    new = [e["short"] for e in (index or {}).get("entries", []) if e["id"] not in before]
+    kv("commits", commits_line(index) + (f"; appended {' '.join(new)}" if new and known is not None else ""))
     s.update_meta(**fields)
     kv("reloaded", s.sid)
     return 0
@@ -1315,7 +1371,7 @@ def build_parser() -> Parser:
     p.add_argument("--cwd")
     p.add_argument("--json", action="store_true")
 
-    p = cmd("reload", cmd_reload, "Refresh the browser after a rebuild; recomputes git-sourced diffs.")
+    p = cmd("reload", cmd_reload, "Refresh the browser after a rebuild or new commits; recomputes git-sourced diffs and appends commits made since the last reload to the desk's commit picker.")
     p.add_argument("--page")
 
     p = cmd("prefs", cmd_prefs, "Show or set the model/effort the chat starts on.", sid=False)

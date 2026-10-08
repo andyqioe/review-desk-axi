@@ -1,8 +1,17 @@
-"""Fallback review data straight from git, for sessions not opened from implementation-summary.
+"""Review data straight from git: the fallback change set, and one change set per commit.
 
 implementation-summary's `build_page.py --review-data` writes a richer manifest (origins,
-rename pairing, hunk symbols) from its change model; this produces the same shape from
+rename pairing, hunk symbols) from its change model; `write` produces the same shape from
 `git diff <base>` plus untracked files, so the desk works on any repository.
+
+`sync_commits` splits the review into the commits it is made of, for the desk's commit picker:
+
+  <session dir>/commits/index.json         the commits in <base>..HEAD, oldest first, and the uncommitted rest
+  <session dir>/commits/<sha>/             manifest.json + diffs/<n>.json for one commit against its parent
+  <session dir>/commits/uncommitted/       the working tree (untracked files included) against HEAD
+
+A commit never changes, so its folder is written once and reused: a reload only adds the
+commits made since, which is what lets the desk append them instead of folding them into one diff.
 """
 
 from __future__ import annotations
@@ -13,14 +22,30 @@ import re
 import subprocess
 from pathlib import Path
 
-from store import write_json
+from store import read_json, write_json
 
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$")
 STATUS_NAME = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed", "N": "untracked"}
+UNCOMMITTED = "uncommitted"
+MAX_COMMITS = 100  # the newest ones; older commits stay visible only in "All changes"
+COMMIT_ID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+
+
+def rev(repo: Path, ref: str) -> str | None:
+    """The commit `ref` names, or None (no such ref, or a repository with no commits yet)."""
+    p = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                       capture_output=True, text=True, check=False)
+    return p.stdout.strip() or None if p.returncode == 0 else None
+
+
+def empty_tree(repo: Path) -> str:
+    """What a root commit is diffed against (its hash depends on the repository's object format)."""
+    return subprocess.run(["git", "-C", str(repo), "hash-object", "-t", "tree", "--stdin"], input="",
+                          capture_output=True, text=True, check=True).stdout.strip()
 
 
 def parse(patch: str) -> tuple[list[dict], list[list[str]]]:
@@ -56,22 +81,29 @@ def untracked_lines(path: Path) -> tuple[list[str], list[str], bool]:
     return data.decode("utf-8", errors="replace").splitlines(), [], False
 
 
-def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = None, label: str | None = None) -> dict:
+def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = None, label: str | None = None,
+          head: str | None = None) -> dict:
+    """manifest.json + diffs/<n>.json in `out`: `base` against the working tree and its untracked files,
+    or, with `head`, against that commit alone."""
     repo = Path(git(repo, "rev-parse", "--show-toplevel").strip())
     scope = ["--", *paths] if paths else []
+    sides = [base, head] if head else [base]
     files = []
     (out / "diffs").mkdir(parents=True, exist_ok=True)
-    for line in git(repo, "diff", "--name-status", "-M", base, *scope).splitlines():
+    for line in git(repo, "diff", "--name-status", "-M", *sides, *scope).splitlines():
         parts = line.split("\t")
         st = parts[0][0]
         path, old = (parts[2], parts[1]) if st in "RC" else (parts[1], None)
         files.append((st, path, old))
-    for path in git(repo, "ls-files", "--others", "--exclude-standard", *scope).splitlines():
-        files.append(("N", path, None))
+    if not head:
+        for path in git(repo, "ls-files", "--others", "--exclude-standard", *scope).splitlines():
+            files.append(("N", path, None))
     for stale in (out / "diffs").glob("*.json"):
         stale.unlink()
     manifest = {"repo": str(repo), "link_root": str(repo), "base_label": label or base, "source": "git", "base": base,
                 "paths": paths or [], "files": []}
+    if head:
+        manifest["head"] = head
     for i, (st, path, old) in enumerate(files, 1):
         notes, binary = [], False
         if st == "N":
@@ -79,7 +111,7 @@ def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = N
             hunks = [{"n": 1, "old_start": 0, "old_len": 0, "new_start": 1, "new_len": len(text), "symbol": ""}] if text else []
             rows = [["", "", f"#1  @@ -0,0 +1,{len(text)} @@", "hunk"]] + [["", str(k), t, "add"] for k, t in enumerate(text, 1)] if text else []
         else:
-            hunks, rows = parse(git(repo, "diff", "-M", "-U3", base, "--", *([old] if old else []), path))
+            hunks, rows = parse(git(repo, "diff", "-M", "-U3", *sides, "--", *([old] if old else []), path))
         adds = sum(r[3] == "add" for r in rows)
         dels = sum(r[3] == "del" for r in rows)
         manifest["files"].append({"n": i, "path": path, "old_path": old, "status": STATUS_NAME.get(st, st),
@@ -88,3 +120,41 @@ def write(repo: Path, out: Path, base: str = "HEAD", paths: list[str] | None = N
         (out / "diffs" / f"{i}.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
     write_json(out / "manifest.json", manifest)
     return manifest
+
+
+def totals(manifest: dict) -> dict:
+    files = manifest.get("files", [])
+    return {"files": len(files), "adds": sum(f.get("adds", 0) for f in files), "dels": sum(f.get("dels", 0) for f in files)}
+
+
+def sync_commits(repo: Path, out: Path, base: str | None, paths: list[str] | None = None) -> dict:
+    """Write commits/: one change set per commit in base..HEAD (only the ones not written yet) and the
+    uncommitted rest, then commits/index.json listing them. Returns the index."""
+    root = out / "commits"
+    root.mkdir(parents=True, exist_ok=True)
+    repo = Path(git(repo, "rev-parse", "--show-toplevel").strip())
+    head = rev(repo, "HEAD")
+    index = {"base": base, "head": head, "entries": [], "uncommitted": None, "merges": 0, "omitted": 0}
+    if base and head:
+        scope = ["--", *paths] if paths else []
+        span = f"{base}..{head}"
+        log = git(repo, "log", "--reverse", "--topo-order", "--no-merges", f"--max-count={MAX_COMMITS}",
+                  "--format=%H%x1f%h%x1f%an%x1f%at%x1f%s", span, *scope)
+        for line in log.splitlines():
+            sha, short, author, at, subject = line.split("\x1f", 4)
+            d = root / sha
+            m = read_json(d / "manifest.json")
+            if m is None:  # a commit's change set never changes; a folder without its manifest is a torn write
+                m = write(repo, d, rev(repo, f"{sha}^") or empty_tree(repo), paths, f"{short}^", head=sha)
+            index["entries"].append({"id": sha, "short": short, "author": author, "time": int(at), "subject": subject,
+                                     **totals(m)})
+        listed = len(index["entries"])
+        total = int(git(repo, "rev-list", "--count", "--no-merges", span, *scope).strip() or 0)
+        index["omitted"] = max(0, total - listed)
+        index["merges"] = int(git(repo, "rev-list", "--count", "--merges", span).strip() or 0)
+    if head:
+        u = write(repo, root / UNCOMMITTED, head, paths, "HEAD")
+        if u["files"]:
+            index["uncommitted"] = totals(u)
+    write_json(root / "index.json", index)
+    return index
