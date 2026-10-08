@@ -70,6 +70,13 @@ review-desk-axi story <sid> remove <sha>
 - `--summary` goes into the reviewer's briefing under "Per-commit summaries", in picker order; `story set` again replaces a page, and a rebuilt page reloads by itself.
 - `/implementation-summary` sets these in per-commit mode (two or more commits, or commits plus uncommitted work).
 
+## Writing in the desk
+
+Everything an agent posts for the user (chat answers, backlog titles and details, summaries) follows Simplified Technical English, ASD-STE100.
+The rules are in implementation-summary's `STE.md`.
+`reply`, `backlog add` and `backlog update` print `ste:` warnings for what they posted; they never block.
+`review-desk-axi ste <file|->` checks a draft before you post it.
+
 ## Review a GitHub pull request
 
 When the user gives a PR link, open the desk on the PR instead of the working tree, from the directory you are in:

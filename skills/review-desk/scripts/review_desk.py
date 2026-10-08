@@ -9,6 +9,7 @@ Main agent
   add <sid> <path[:a-b]>... [--note N] [--focus]   pin files or ranges into the editor
   page <sid> open <file.html> [--title T] [--background] | close <P#|path> | list
   story <sid> set <sha|uncommitted> --page P [--summary S] | remove <id> | list
+  ste <file|->                                     check text against Simplified Technical English
                                                    one commit's own summary in the Story tab
                                                    show an HTML page as a read-only editor tab
   run <sid> -- <command...>                        run a page generator; writes confined to pages/
@@ -728,6 +729,36 @@ def cmd_wait(a) -> int:
         time.sleep(0.25)
 
 
+def ste_module():
+    """implementation-summary's Simplified Technical English checker (its STE.md), or None when that skill is missing."""
+    for d in (SKILL.parent / "implementation-summary" / "scripts", Path("~/.claude/skills/implementation-summary/scripts").expanduser()):
+        if (d / "ste_check.py").is_file():
+            if str(d) not in sys.path:
+                sys.path.insert(0, str(d))
+            import ste_check
+            return ste_check
+    return None
+
+
+def ste_warn(text: str, label: str) -> None:
+    """Print STE warnings for text a person reads in the desk; quiet when the text is clean or the checker is missing."""
+    m = ste_module()
+    rep = m.check(text) if m and text else None
+    if rep and rep.notes:
+        block("ste", "\n".join(m.summary_lines(rep, label, 8)))
+
+
+def cmd_ste(a) -> int:
+    m = ste_module()
+    if m is None:
+        raise DeskError("the STE checker is part of implementation-summary, which is not installed beside this skill",
+                        ["Install implementation-summary next to review-desk"])
+    text = sys.stdin.read() if a.file == "-" else Path(a.file).read_text(encoding="utf-8")
+    rep = m.check(text, m.kind_of(a.file))
+    print("\n".join(m.summary_lines(rep, "stdin" if a.file == "-" else a.file, None)))
+    return 0
+
+
 def read_text_arg(a) -> str:
     if a.text is not None:
         return a.text
@@ -751,6 +782,8 @@ def cmd_reply(a) -> int:
     kv("answers", " ".join(f"#{i}" for i in to) or "none")
     if dup:
         kv("duplicate", "identical reply already posted; nothing written")
+    else:
+        ste_warn(text, f"reply #{e['seq']}")
     if a.then_wait:
         sys.stdout.flush()
         return cmd_wait(a)
@@ -794,6 +827,7 @@ def cmd_backlog(a) -> int:
         i = s.backlog_add(a.title, a.detail or "", a.kind, a.anchor, a.from_seq, patch, by=a.by, dedupe=True)
         kv("existing" if i.get("existing") else "created", i["id"])
         kv("title", i["title"])
+        ste_warn(f"{a.title}.\n\n{a.detail or ''}", f"backlog {i['id']}")
         help_block([f'Reply with "Logged {i["id"]}: <one line>": ' + run(f"reply {a.sid} --to <seq> --file - --then-wait")])
     elif a.action == "list":
         items = s.backlog()
@@ -811,6 +845,7 @@ def cmd_backlog(a) -> int:
             raise DeskError("backlog update needs an id", [run(f'backlog {a.sid} update <id> --detail-file -') + " with the detail on stdin"], 2)
         i = s.backlog_update(a.ids[0].upper(), title=a.title, detail=a.detail, anchor=a.anchor)
         kv("updated", i["id"])
+        ste_warn(a.detail or "", f"backlog {i['id']}")
     else:
         status = {"ack": "acked", "done": "done", "dismiss": "dismissed", "reopen": "open"}[a.action]
         if not a.ids:
@@ -1418,6 +1453,9 @@ def build_parser() -> Parser:
     p.add_argument("target", nargs="?", help="open: an .html file or a page id; close: a page id or path")
     p.add_argument("--title", help="tab title (default: the file name)")
     p.add_argument("--background", action="store_true", help="open the tab without switching to it")
+
+    p = cmd("ste", cmd_ste, "Check text against Simplified Technical English (implementation-summary's STE.md) before you post it. Example: ste - < draft.md", sid=False)
+    p.add_argument("file", help="a Markdown or HTML file, or - for standard input")
 
     p = cmd("story", cmd_story, "Give a commit its own summary in the Story tab, remove it, or list them. Example: story d9534008 set a1b2c3d --page ~/x/commit-a1b2c3d.html --summary ~/x/a1b2c3d.md")
     p.add_argument("action", choices=["set", "remove", "list"])

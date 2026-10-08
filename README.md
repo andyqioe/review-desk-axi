@@ -348,6 +348,7 @@ Every command except `open` and `url` works with the server down, because disk i
 | `page <sid> open <file.html> [--title T] [--background]`, `close <id>`, `list` | HTML pages as read-only tabs |
 | `run <sid> -- <command...>` | run a page generator with writes confined to the pages folder |
 | `story <sid> set <sha\|uncommitted> --page P [--summary S]`, `remove <sha>`, `list` | one commit's own summary in the Story tab |
+| `ste <file\|->` | check text against Simplified Technical English (ASD-STE100) before posting it; `reply` and `backlog` warn on their own |
 | `reload <sid> [--page P]` | refresh the browser after a rebuild; recompute git diffs and append new commits to the picker |
 | `status <sid>`, `url <sid>`, `end <sid>`, `prefs [--model M --effort E]` | inspect, reopen, close, set defaults |
 | `setup [hooks\|bin\|agents\|all]` | install the hooks, the PATH link and the fallback agents |

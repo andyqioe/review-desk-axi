@@ -1063,6 +1063,32 @@ class CommitPickerTest(Desk):
             self.assertIn(needle, js)
 
 
+class SteTest(Desk):
+    """Text a person reads in the desk is checked against Simplified Technical English; warnings never block."""
+
+    def test_ste_command_and_warnings_on_reply_and_backlog(self):
+        out = self.rd("ste", "-", input="The charge is sent; it might fail.\n")
+        self.assertIn("ste: 3 warnings in 1 sentences (stdin)", out)
+        for rule in ("passive", "hedge", "semicolon"):
+            self.assertIn(f" {rule}:", out)
+        self.assertIn("no warnings", self.rd("ste", "-", input="The bank gets the charge.\n"))
+        seq = self.say("why does it retry?")
+        out = self.rd("reply", self.sid, "--to", str(seq), "--file", "-", input="The retry is triggered by the worker.\n")
+        self.assertIn("posted:", out)
+        self.assertIn("passive", out)
+        self.assertEqual(self.session_chat()[-1]["text"], "The retry is triggered by the worker.")  # posted as written
+        clean = self.rd("reply", self.sid, "--to", str(seq), "--file", "-", input="The worker retries the charge once.\n")
+        self.assertNotIn("warning", clean)
+        out = self.rd("backlog", self.sid, "add", "--title", "Retry is not bounded", "--detail-file", "-",
+                      input="- **Issue**: the loop would run forever.\n")
+        self.assertIn("created:", out)
+        self.assertIn("hedge", out)
+
+    def session_chat(self):
+        import store
+        return store.open_session(self.sid).chat()
+
+
 class TabPresenceTest(Desk):
     """A hidden desk tab closes its event stream (a browser keeps 6 connections per host) and checks in instead;
     the server still counts it as open, so `open` does not open a duplicate tab and the idle watchdog waits."""
