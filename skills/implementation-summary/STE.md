@@ -23,6 +23,8 @@ Put code identifiers in backticks, so the checker and the reader see them as nam
 Write "use", not "utilize", and "before", not "prior to".
 - Do not use words that end in "-ing" as verbs or as adjectives ("the existing cache", "by restarting the worker").
 Write "the cache that exists" or "when the worker restarts".
+Rewrite the sentence, and do not only swap the form: "the link must stop to work" means a different thing than "stop working".
+Write "the link must stop" or "the link must not redirect after that time".
 An "-ing" word is correct when it is a technical name (`logging`, a `string`) or a noun with no verb sense ("during", "nothing").
 - Do not use a phrasal verb when a single verb exists.
 Write "start", not "set up", and "do", not "carry out".
