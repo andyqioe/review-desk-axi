@@ -51,9 +51,9 @@ Around the art, the text is structured for scanning: short headings, one bold le
    - When the project is not in git and you built from a scratch git copy, pass `--source <real directory>` so links and naming come from the real project.
 6. **Ask whether to open a Review Desk, every time.** Do this for every size of change, tiny ones included, and never open a desk unasked.
    - Read the last reviewer choice with `RD prefs` (`RD` = `review-desk-axi`, an AXI CLI whose `help[]` blocks name each next command).
-   - Ask one AskUserQuestion holding three questions:
-     **Desk**: "Open a Review Desk for this change?" with "Yes (Recommended)" and "No".
-     **Model**: Haiku, Sonnet, Opus, Fable, with the last choice first and labelled "(Recommended)", plus "No reviewer".
+   - Ask one AskUserQuestion holding three questions (a question takes at most 4 options, so "no reviewer" lives in the first):
+     **Desk**: "Open a Review Desk for this change?" with "Yes, with a reviewer (Recommended)", "Yes, desk only (no reviewer)" and "No".
+     **Model**: Haiku, Sonnet, Opus, Fable, with the last choice first and labelled "(Recommended)".
      **Effort**: low, medium, high, with the last choice first.
    - On "No", skip the rest of this step and step 7: the reply ends with the summary, and the page path stays in the build output for later.
    - On "Yes", open the desk (the `review-desk` skill owns the details) instead of Lavish:
@@ -61,7 +61,7 @@ Around the art, the text is structured for scanning: short headings, one bold le
      - `RD open --dir <the .review folder the build printed> --title "<feature name>" --page <the .html it printed> --summary $SCRATCH/summary.md --notes $SCRATCH/review-notes.md --repo <repo>`
      - In per-commit mode, attach each commit's own page: `RD story <sid> set <sha> --page <commit .html> --summary <commit .md>` (and `uncommitted` for the uncommitted part).
      - `RD add <sid> <the code moments as path:start-end> --note "<one line each>"`, up to 10, so the files the reviewer should read first open as tabs.
-     - Unless the answer was "No reviewer", `RD prefs --model <m> --effort <e>`, then start the reviewer and its watch as "Start a reviewer" in the review-desk skill says (`RD reviewer <sid> start ...`, then `RD watch <sid>` in the background); that skill's own model and effort question is already answered.
+     - Unless the answer was "desk only", `RD prefs --model <m> --effort <e>`, then start the reviewer and its watch as "Start a reviewer" in the review-desk skill says (`RD reviewer <sid> start ...`, then `RD watch <sid>` in the background); that skill's own model and effort question is already answered.
 7. **End the reply with the desk URL** on its own line (`↗ <url>`) when a desk was opened, then stop. Do not poll; the background `watch` wakes you.
 
 Steps 4 and 5 tell the same story; write the terminal version first because it forces the tight version of every sentence, then expand on the page.

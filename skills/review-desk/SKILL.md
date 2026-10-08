@@ -142,10 +142,11 @@ Keys:
 The reviewer is one long-lived Claude session per review (`scripts/reviewer_host.py`), not a subagent.
 When the user picks another model or effort in the chat, the same session switches in place (`set_model`, `effortLevel`): no respawn, and the conversation is kept.
 
-1. Ask the user which reviewer to run with one AskUserQuestion holding two questions:
+1. Ask the user which reviewer to run with one AskUserQuestion holding three questions (a question takes at most 4 options):
+   - **Reviewer**: "Start a reviewer (Recommended)" or "No reviewer" for a desk without chat.
    - **Model**: Haiku (fast, cheap, easy questions), Sonnet, Opus, Fable. Put `last_tier` from `open` first, labelled "(Recommended)".
    - **Effort**: low, medium, high, with the last choice first.
-   Add a "No reviewer" option to the model question for a desk without chat.
+   `/implementation-summary` asks these together with whether to open the desk at all; do not ask twice.
 2. `review-desk-axi reviewer <sid> start --model <m> --effort <e>`. It starts the host in the background (log: `<session dir>/reviewer.log`) and resumes the previous conversation only if the reviewer's instructions are unchanged; after a desk upgrade it starts fresh and briefs the chat (`resumes: fresh conversation (desk instructions changed)`).
 3. Run `review-desk-axi watch <sid>` with Bash `run_in_background: true` and `timeout: 7200000`. It blocks until the main agent has work (Execute, End, or the reviewer exiting); its completion wakes you while you are idle. While you work on something else, your hooks deliver Execute and End instead (see "Delivery").
 4. End your turn with the desk URL alone on its last line. Do not poll.
