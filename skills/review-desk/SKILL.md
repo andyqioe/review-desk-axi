@@ -196,3 +196,4 @@ Ask the model/effort question in plain text where AskUserQuestion does not exist
 - `assets/desk.{html,css,js}` - the editor template; no build step.
 - `evals/` - eight task evals for both roles plus trigger queries, with a harness that seeds sessions, plays the user and grades from the session files (see `evals/README.md`).
 - `tests/` - `python3 -m unittest discover -s tests` from this directory: real server, real CLI, AXI output contract, kill -9 durability, token and origin checks, and pull requests against a local "GitHub" with a fake `gh` (`tests/fake_gh.py`).
+  `tests/chrome/many_tabs.sh` opens 8 desk tabs in one headless Chrome profile and checks they all load (a browser keeps 6 connections per host, so hidden tabs must release their event stream).

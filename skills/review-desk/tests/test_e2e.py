@@ -1024,6 +1024,51 @@ class CommitPickerTest(Desk):
             self.assertIn(needle, js)
 
 
+class TabPresenceTest(Desk):
+    """A hidden desk tab closes its event stream (a browser keeps 6 connections per host) and checks in instead;
+    the server still counts it as open, so `open` does not open a duplicate tab and the idle watchdog waits."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["REVIEW_DESK_SEEN_SECONDS"] = "3"
+        try:
+            super().setUpClass()
+        finally:
+            del os.environ["REVIEW_DESK_SEEN_SECONDS"]
+
+    def tabs(self) -> int:
+        return self.health()["clients"].get(self.sid, 0)
+
+    def stream(self, tab: str):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", f"/api/{self.sid}/events?tab={tab}&t={self.token}")
+        r = c.getresponse()
+        self.assertEqual(r.status, 200)
+        r.readline()  # the first event: the stream is registered
+        return c
+
+    def test_streaming_and_hidden_tabs_count_until_their_check_ins_lapse(self):
+        self.assertEqual(self.tabs(), 0)
+        a = self.stream("tabA")
+        self.assertEqual(self.tabs(), 1)
+        self.assertEqual(self.http("GET", f"/api/{self.sid}/seen?tab=tabB")[0], 200)
+        self.assertEqual(self.tabs(), 2)  # one streaming, one hidden
+        self.assertEqual(self.http("GET", f"/api/{self.sid}/seen?tab=tabC", token=None)[0], 403)
+        self.http("GET", f"/api/{self.sid}/seen?tab=" + "x" * 65)  # not a tab id: ignored
+        self.assertEqual(self.tabs(), 2)
+        a.close()  # tab A goes hidden: it counts until its first check-in is due
+        time.sleep(0.5)
+        self.assertEqual(self.tabs(), 2)
+        time.sleep(3.2)  # neither tab checked in again
+        self.assertEqual(self.tabs(), 0)
+
+    def test_desk_closes_its_stream_while_hidden(self):
+        js = urllib.request.urlopen(f"http://127.0.0.1:{self.port}/assets/desk.js", timeout=5).read().decode()
+        for needle in ("function park(", "function resume(", '"visibilitychange"', "seen?tab=", "events?tab="):
+            self.assertIn(needle, js)
+
+
 class GitDiffTest(unittest.TestCase):
     def test_untracked_symlinks_and_binaries_open(self):
         import gitdiff

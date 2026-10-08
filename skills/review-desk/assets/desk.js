@@ -2212,15 +2212,41 @@ function setPane(p) {
   $("#backlog-pane").hidden = p !== "backlog";
 }
 
+// A browser keeps at most 6 connections per host for each profile, and a streaming tab holds one, so a 7th
+// desk tab would never load. A hidden tab closes its stream and checks in once a minute instead (the server
+// still counts it as open); showing the tab again reconnects and redraws whatever changed meanwhile.
+const TAB_ID = Math.random().toString(36).slice(2, 12);
+const live = { es: null, checkIns: null };
 function connect() {
-  const es = new EventSource(`/api/${D.sid}/events?t=${encodeURIComponent(D.token)}`);
+  if (live.es) return;
+  const es = live.es = new EventSource(`/api/${D.sid}/events?tab=${TAB_ID}&t=${encodeURIComponent(D.token)}`);
   es.addEventListener("sync", refresh);
   es.addEventListener("stream", (ev) => {
     try { const d = JSON.parse(ev.data); S.draft = d && d.reply_to ? d : null; } catch (_) { S.draft = null; }
     renderDraft();
   });
-  es.onerror = () => { S.offline = true; const el = $("#presence"); el.dataset.state = "offline"; $(".label", el).textContent = "desk server offline"; };
+  es.onerror = () => {
+    if (es !== live.es) return;  // a stream this tab closed on purpose
+    S.offline = true; const el = $("#presence"); el.dataset.state = "offline"; $(".label", el).textContent = "desk server offline";
+  };
   es.onopen = () => { if (S.offline) { S.offline = false; recoverFromOutage(); } };
+}
+const checkIn = () => api(`seen?tab=${TAB_ID}`).catch(() => {});
+function park() {
+  if (live.es) { live.es.close(); live.es = null; }
+  if (!live.checkIns) { checkIn(); live.checkIns = setInterval(checkIn, 60000); }
+}
+function resume() {
+  clearInterval(live.checkIns); live.checkIns = null;
+  if (live.es) return;
+  connect();
+  refresh().then(() => { if (S.active !== "story" && !isPage(S.active)) renderCode(); });
+}
+function wireVisibility() {
+  document.addEventListener("visibilitychange", () => (document.hidden ? park() : resume()));
+  window.addEventListener("pagehide", park);
+  window.addEventListener("pageshow", () => { if (!document.hidden) resume(); });
+  if (document.hidden) park(); else connect();
 }
 
 // The server went away (a restart after an upgrade) and came back. A frame that tried to load meanwhile shows
@@ -2241,5 +2267,5 @@ renderTabs();
 api("skills").then((d) => { S.skills = d.skills || []; }).catch(() => {});
 setInterval(tickWaiting, 1000);
 refresh().then(() => { if (window.hljs && S.active !== "story") renderCode(); });
-connect();
+wireVisibility();
 window.addEventListener("load", () => { if (S.active !== "story") renderCode(); S.chatSig = ""; if (S.state) renderChat(); });

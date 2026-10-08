@@ -17,6 +17,8 @@ import mimetypes
 import os
 import re
 import secrets
+import select
+import socket
 import subprocess
 import sys
 import threading
@@ -37,6 +39,11 @@ MAX_BODY = 1024 * 1024
 ROUTE = re.compile(r"^/(?:api|s)/(?P<sid>[0-9a-f]{8})(?:/(?P<rest>.*))?$")
 CLIENTS: dict[str, int] = {}
 CLIENTS_LOCK = threading.Lock()
+# A hidden desk tab closes its event stream (a browser keeps 6 connections per host, so streaming tabs would
+# starve the 7th) and checks in with /seen instead. SEEN[sid][tab id] is its last check-in; a tab that checked
+# in within SEEN_SECONDS still counts as open, for `open` ("already open") and for the idle watchdog.
+SEEN: dict[str, dict[str, float]] = {}
+SEEN_SECONDS = int(os.environ.get("REVIEW_DESK_SEEN_SECONDS", "150"))
 LAST_ACTIVITY = [time.time()]
 
 
@@ -278,8 +285,7 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         if u.path == "/health":
-            with CLIENTS_LOCK:
-                clients = dict(CLIENTS)
+            clients = open_tabs()
             return self.json({"app": "review-desk", "home": str(store.home().resolve()), "pid": os.getpid(), "clients": clients,
                               "code": CODE_ID})
         if u.path.startswith("/assets/"):
@@ -339,7 +345,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.fail(404, "file not readable in repo")
             return self.json({"path": q["path"], "lines": lines})
         if rest == "events":
-            return self.events(s)
+            return self.events(s, q.get("tab"))
+        if rest == "seen":
+            seen(s.sid, q.get("tab"))
+            return self.json({"ok": True})
         if rest == "search":
             return self.search(s, q)
         return self.fail(404, "not found")
@@ -409,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype += "; charset=utf-8"
         return self.send(200, body, ctype, extra)
 
-    def events(self, s: store.Session) -> None:
+    def events(self, s: store.Session, tab: str | None = None) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -417,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         with CLIENTS_LOCK:
             CLIENTS[s.sid] = CLIENTS.get(s.sid, 0) + 1
+        seen(s.sid, tab)
         try:
             last, beat, tick = None, time.time(), time.time()
             draft_path, draft_rev = s.dir / "stream.json", None
@@ -435,11 +445,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b"event: sync\ndata: {}\n\n")
                     self.wfile.flush()
                     last, tick = rev, time.time()
+                    seen(s.sid, tab)
                 elif time.time() - beat > 15:
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
                     beat = time.time()
                 LAST_ACTIVITY[0] = time.time()
+                if self.peer_closed():  # a tab that closed its stream (hidden, or gone) frees its thread now
+                    break
                 time.sleep(0.1)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
@@ -448,6 +461,15 @@ class Handler(BaseHTTPRequestHandler):
                 CLIENTS[s.sid] -= 1
                 if CLIENTS[s.sid] <= 0:
                     del CLIENTS[s.sid]
+            seen(s.sid, tab)  # a tab that just went hidden counts until its first check-in
+
+    def peer_closed(self) -> bool:
+        """True once the client has closed the connection; an event stream otherwise learns it on the next write."""
+        try:
+            ready, _, _ = select.select([self.connection], [], [], 0)
+            return bool(ready) and not self.connection.recv(1, socket.MSG_PEEK)
+        except (OSError, ValueError):
+            return True
 
     # -------------------------------------------------------------- POST
     def do_POST(self):  # noqa: N802
@@ -552,11 +574,29 @@ class Handler(BaseHTTPRequestHandler):
         return self.fail(404, "not found")
 
 
+def seen(sid: str, tab: str | None) -> None:
+    """Note that desk tab `tab` of session `sid` is open (streaming, or hidden and checking in)."""
+    if tab and re.fullmatch(r"[\w-]{1,64}", tab):
+        with CLIENTS_LOCK:
+            SEEN.setdefault(sid, {})[tab] = time.time()
+
+
+def open_tabs() -> dict[str, int]:
+    """sid -> desk tabs open in a browser: the streaming ones plus hidden ones that checked in recently.
+    A stream without a tab id (a desk page from before tab ids) counts on its own."""
+    cutoff = time.time() - SEEN_SECONDS
+    with CLIENTS_LOCK:
+        for sid in list(SEEN):
+            SEEN[sid] = {t: at for t, at in SEEN[sid].items() if at >= cutoff}
+            if not SEEN[sid]:
+                del SEEN[sid]
+        return {sid: max(CLIENTS.get(sid, 0), len(SEEN.get(sid, {}))) for sid in set(CLIENTS) | set(SEEN)}
+
+
 def watchdog(httpd: ThreadingHTTPServer) -> None:
     while True:
         time.sleep(30)
-        with CLIENTS_LOCK:
-            busy = bool(CLIENTS)
+        busy = bool(open_tabs())
         if not busy and time.time() - LAST_ACTIVITY[0] > IDLE_SECONDS:
             httpd.shutdown()
             return
