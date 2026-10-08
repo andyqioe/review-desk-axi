@@ -1,7 +1,7 @@
 # Language protocol
 
-This file governs how the summary's prose reads, in the terminal and on the page.
-SKILL.md governs what the summary contains; this file governs the words.
+This file governs how the summary's text reads, in the terminal and on the page.
+SKILL.md governs what the summary contains; this file governs the words and how they are laid out.
 
 The reader is smart but was not in the session.
 They do not know the project's private vocabulary, and they should not need to.
@@ -37,15 +37,25 @@ On the page, write the pair as markup so the risk gets its label:
 <p class="plain">Facts that prevent nothing (a schema version, a moved file) go in a plain line.</p>
 ```
 
-In the terminal, write the same pair as two sentences, the first starting with "Risk:".
-Use pairs only for real failure modes; a story with nothing to prevent is plain prose.
+In the terminal, write the same pair as the story's first bullets: `**Risk**:` with the failure, then the guard under `**Behavior**` or `**Mechanism**`.
+Use pairs only for real failure modes; a story with nothing to prevent starts at `**Behavior**`.
 Never invent a risk to fill the pattern.
 
-## 3. Plain sentences
+## 3. Lead sentence, then labeled bullets
+
+A story is read in two passes: the heading and its bold lead sentence first, then the bullets the reader cares about.
+
+- Open every story with one bold sentence that states the behavior change.
+- Follow it with labeled bullets, in this order and only those the story needs: `**Risk**`, `**Behavior**`, `**Mechanism**`, `**Decision**`, `**Where**`.
+- Each bullet is one or two full sentences with an actor and a verb, and its links; the label is a signpost, never a substitute for the sentence.
+- Several decisions get several `**Decision**` bullets; never pack two ideas into one bullet with a semicolon chain.
+- Parallel items elsewhere are lists too: scene stops, "Also changed" groups, Proof, Loose threads, the overview's Commits.
+
+## 4. Plain sentences
 
 - **Give every action an actor and a verb.**
 "The worker saves a record before it sends", not "Dispatch recording precedes transport".
-- **No fragments, no slash compounds, no dot lists in prose.**
+- **No fragments, no slash compounds, no dot lists**, in bullets as much as in prose.
 "endpoint and token", not "endpoint/token"; "a runner, its instructions and a results page", not "Runner · instructions · results".
 - **Every negative says what it protects.**
 "A late webhook can't mark the order PAID, so a stale answer can't ship an order whose charge failed."
@@ -55,7 +65,7 @@ Never invent a risk to fill the pattern.
 Otherwise use the plain word and link the code.
 - **Plain hyphens, never em dashes.**
 
-## 4. Terms get cards, not lectures
+## 5. Terms get cards, not lectures
 
 A term the reader may not know gets a hover card instead of an inline definition, so the sentence stays short.
 Mark it with `data-term` and define it once in the page's glossary block (format in `references/page.md`).
@@ -80,14 +90,14 @@ A suggested question must be answerable from the code or the session; never sugg
 The terminal has no hover.
 There, use the plain word, or give an essential term a short parenthetical on first use: "the idempotency key (the provider's way to recognize a retry)".
 
-## 5. Length
+## 6. Length
 
 Clarity first, then brevity.
 A rewrite in this style runs about 1 to 1.3 times the length of the compressed version, because definitions moved into cards.
 Cut filler, hedges and restatement as before ("properly", "robust", "note that", "this means").
 If a sentence needs its words to be understood, keep them.
 
-## 6. Before and after
+## 7. Before and after
 
 Compressed:
 
@@ -97,18 +107,20 @@ Compressed:
 
 This protocol (terms in brackets carry cards on the page):
 
-> **A sent charge can't leave the order guessing**
+> ### A sent charge can't leave the order guessing
 >
-> Risk: the worker sends a charge, crashes, and no one knows what the bank was told.
-> Before sending, the worker now saves a [v3 intent]: the fixed amount, its [idempotency key], the exact card and the deadline.
-> In the same transaction it rechecks the order and the [fraud holds], and moves the order out of [PENDING] so it can't be charged a second time.
+> **The worker records exactly what it is about to charge before it sends anything, so a crash mid-charge never leaves the order unknown.**
 >
-> Risk: a slow webhook arrives after the charge moved on, and reports the order as unpaid or closes the question of whether a [refund] happened.
-> Late webhooks are filed under the original intent and can do neither.
+> - **Risk**: the worker sends a charge, crashes, and no one knows what the bank was told.
+> - **Mechanism**: before sending, the worker saves a [v3 intent] with the fixed amount, its [idempotency key], the exact card and the deadline.
+> - **Mechanism**: in the same transaction it rechecks the order and the [fraud holds], and moves the order out of [PENDING] so it can't be charged a second time.
+> - **Risk**: a slow webhook arrives after the charge moved on, and reports the order as unpaid or closes the question of whether a [refund] happened.
+> - **Behavior**: late webhooks are filed under the original intent and can do neither.
 
-## 7. Check before publishing
+## 8. Check before publishing
 
-- Every story heading states a guarantee in plain words.
+- Every story heading states a guarantee in plain words, and a bold lead sentence follows it.
+- Every bullet is a full sentence under a label the story needs.
 - Every risk is a real failure with an actor, an event and a consequence.
 - Every project term in a story is either plain-worded or carries a card; every card has a definition and a code link where one exists.
 - No fragments, slash compounds, dot lists or unexplained negatives in prose.

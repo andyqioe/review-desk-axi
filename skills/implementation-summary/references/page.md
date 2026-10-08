@@ -18,7 +18,7 @@ python3 "$SKILL/scripts/build_page.py" \
   --review-data
 ```
 
-Then open the Review Desk on it (SKILL.md step 6); the desk's Story tab shows this page and its file links open in the desk.
+Then ask whether to open the Review Desk on it (SKILL.md step 6); the desk's Story tab shows this page and its file links open in the desk.
 
 - Write the body and the terminal summary to the session scratchpad; the build persists both.
 - The build writes everything into `~/.claude/implementation-summaries/<project>/<milestone>/<component>/` as files sharing one `<YYYYMMDD-HHMM>-<title-slug>` stem: `.html` (the page), `.md` (the terminal summary), `.body.html`, `.changes.json` (every file, hunk and origin) and `.inventory.md`, then rebuilds `<project>/INDEX.md`. It prints the folder and the page path.
@@ -27,7 +27,8 @@ Then open the Review Desk on it (SKILL.md step 6); the desk's Story tab shows th
 - If the central tree is not writable (a sandboxed agent), the build persists into `<repo>/.lavish/implementation-summaries/` and says so. Leave it; an unsandboxed session merges it with `python3 "$SKILL/scripts/archive.py" sweep <that folder> --move`.
 - Pages built before the tree existed: `python3 "$SKILL/scripts/archive.py" adopt <repo>/.lavish/impl-summary-*.html` copies each into place (project from the files it links, milestone from the reflog at its build time, outside git the build date) and skips any already filed.
 - The build refuses to write if any `data-src`, `data-diff` or `data-loc` points at a missing file or out-of-range line, or `data-hunks` names a hunk that does not exist. Fix the reference and rebuild; never delete the reference to make the error go away.
-- The build prints `stories cite N/M changed files` and names the files that appear only under "Every change". Read it: a file that changed behavior should be in a story or the "Also changed" sentence, not only in the inventory.
+- The build prints `stories cite N/M changed files` and names the files that appear only under "Every change". Read it: a file that changed behavior should be in a story or an "Also changed" bullet, not only in the inventory.
+- `--commit <sha>` builds one commit's page (per-commit mode): its diff against its parent, excerpts read from that commit, and a file name ending in the short sha. It takes no `--base` or `--review-data`; build those on the overview page.
 - `--review-data` (bare) writes `<stem>.review/` next to the page and prints it; pass that folder back (`--review-data <folder>`) when rebuilding after a review, so the desk session, its chat and its backlog stay attached.
 - Editor links default to `vscode://`. Pass `--editor cursor|zed|windsurf|file|none` or set `IMPL_SUMMARY_EDITOR` when you know the user's editor.
 
@@ -70,17 +71,22 @@ Add `data-calm` to a `pre.scene` to keep only the assembly and twinkle, without 
 
 ### Story section
 
-One per feature (or per major part of one feature).
-Prose on the left stays sticky while the visuals scroll on the right; it stacks on narrow screens.
+One per feature (or per major part of one feature), up to 10.
+The text on the left stays sticky while the visuals scroll on the right; it stacks on narrow screens.
+It has the terminal story's structure (`LANGUAGE.md` section 3): a bold lead sentence, then labeled bullets, each a full sentence with its links.
 
 ```html
 <section class="story">
   <div class="story-head"><span class="index">01</span><h2>Rows with quoted commas survive</h2></div>
   <div class="story-grid">
     <div class="prose">
-      <p>What it does now, in behavior terms...</p>
-      <p>How it works, walking the path with links like <a data-loc="src/parse.py:41"></a>...</p>
-      <p class="callout"><strong>Decision:</strong> why it is built this way, and what was traded.</p>
+      <p class="lead">Customers with a comma in their name now reach staging instead of vanishing.</p>
+      <ul class="points">
+        <li data-label="risk">A row like "Smith, John" splits into too many fields, fails validation and is dropped without a log line.</li>
+        <li data-label="mechanism">The parser reads rows with <code>csv.reader</code>, which keeps commas inside quotes (<a data-loc="src/parse.py:41"></a>).</li>
+        <li data-label="decision">Parsing moved into its own module so the fix has one home and a test of its own.</li>
+        <li data-label="where">Ingest calls the parser once per file, before validation (<a data-loc="src/ingest.py:22"></a>).</li>
+      </ul>
     </div>
     <div class="visual">
       <!-- scene-wrap, code figures, diff figures -->
@@ -131,6 +137,7 @@ A file whose diff exceeds 4000 lines renders its first 4000 with a labelled cut.
 ### Risk and guard
 
 `LANGUAGE.md` section 2: a story's failure modes as pairs, then any plain facts.
+In a story, prefer the `risk` bullet in `.points` (above); a standalone pair suits a story that is mostly risks.
 
 ```html
 <div class="pair">
@@ -208,3 +215,5 @@ Long secondary material (a second excerpt, a data table) goes in `<details class
 
 hero → constellation (multi-feature only) → one story per feature → every change (automatic) → proof → loose threads.
 That mirrors the terminal summary, so a reader can switch between them without getting lost.
+
+In per-commit mode (SKILL.md) each commit gets its own page in this order, built with `--commit <sha>`, and the overview page holds the hero, a commits list (`<ul class="points">` with one `<li data-label="a1b2c3d">` per commit), every change, proof and loose threads.

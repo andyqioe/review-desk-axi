@@ -50,6 +50,16 @@
       "files": [
         "fixtures/csv-ingest"
       ]
+    },
+    {
+      "id": 6,
+      "name": "multi-commit-stepwise",
+      "fixture": "shortener",
+      "prompt": "build these for the shortener as separate commits, one per feature, with tests in the same commit: (1) rate limit POST /shorten per client IP with a token bucket, 5 burst refilling 1/sec, 429 with retry-after when empty; (2) optional ttlSeconds on shorten, GET returns 410 gone after it expires. node:test, no new deps. commit each one on main as you finish it",
+      "expected_output": "Two commits on main. Per-commit mode: collect_changes.py run with --base at the commit before the work (its Commits block lists both), one independent summary per commit written from --commit <sha> (its own thesis, scene, bullet-structured stories, code moments, proof), one page per commit built with build_page.py --commit, plus a short overview listing both commits. Before any desk opens, one AskUserQuestion asks whether to open a Review Desk (plus reviewer model and effort); on yes the desk opens on the overview and each commit's page is attached with review-desk-axi story set.",
+      "files": [
+        "fixtures/shortener"
+      ]
     }
   ]
 }

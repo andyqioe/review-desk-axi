@@ -351,6 +351,21 @@ details.cfile > figure.code .code-head { background: var(--surface-2); }
 .guard { margin: 0; padding-left: 14px; border-left: 2px solid var(--primary); }
 .plain { margin-top: 22px; color: var(--text-2); font-size: 15px; }
 
+/* ------------------------------------------------- story structure: a lead sentence, then labeled bullets (LANGUAGE.md 3) */
+.lead { margin: 0 0 18px; color: var(--text); font-weight: 600; font-size: 17px; line-height: 1.5; }
+.points { list-style: none; margin: 0 0 22px; padding: 0; display: grid; gap: 14px; }
+.points li { padding-left: 14px; border-left: 2px solid var(--border); color: #d4d4d8; font-size: 15px; }
+.points li[data-label]::before {
+  content: attr(data-label); display: block; width: fit-content; margin: 0 0 6px;
+  font: 600 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-2); border: 1px solid var(--border); background: var(--surface-2);
+  padding: 4px 7px; border-radius: var(--radius-pill);
+}
+.points li[data-label="risk"] { border-left-color: rgba(251, 191, 36, 0.45); }
+.points li[data-label="risk"]::before { color: var(--warn); border-color: rgba(251, 191, 36, 0.28); background: rgba(251, 191, 36, 0.08); }
+.points li[data-label="decision"] { border-left-color: var(--primary); }
+.points li[data-label="decision"]::before { color: #c7d2fe; border-color: var(--primary-soft); background: var(--primary-soft); }
+
 /* ------------------------------------------------- glossary cards and Ask Claude (glossary.js) */
 .term {
   color: var(--text);
