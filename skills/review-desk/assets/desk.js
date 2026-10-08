@@ -308,7 +308,7 @@ function pickerMenu(open) {
   renderPickerMenu();
   const r = $("#commit-pick").getBoundingClientRect();
   Object.assign(menu.style, { top: `${Math.round(r.bottom + 4)}px`, left: `${Math.round(r.left)}px`, minWidth: `${Math.round(r.width)}px`,
-                              maxWidth: `${Math.max(Math.round(r.width), Math.min(440, window.innerWidth - r.left - 16))}px` });
+                              maxWidth: `${Math.max(Math.round(r.width), Math.min(600, window.innerWidth - r.left - 16))}px` });
   const cur = $(".cp-item.active", menu) || $(".cp-item", menu);
   cur?.focus();
   cur?.scrollIntoView({ block: "nearest" });
