@@ -29,6 +29,7 @@ IMPL = next((p for p in (SKILL.parent / "implementation-summary" / "scripts" / "
                         Path.home() / ".claude" / "skills" / "implementation-summary" / "scripts" / "build_page.py") if p.exists()),
             SKILL.parent / "implementation-summary" / "scripts" / "build_page.py")
 sys.path.insert(0, str(SKILL / "scripts"))
+from axi import value as toon  # noqa: E402
 
 
 def free_port() -> int:
@@ -1037,7 +1038,8 @@ class CommitPickerTest(Desk):
             (tmp / f"{name}.html").write_text(f"<!doctype html><title>{name}</title><body><p>{text}</p></body>")
             (tmp / f"{name}.md").write_text(f"## {text}\n\nDetail for {name}.\n\n### Every change\n<details>files</details>\n")
         out = self.rd("story", self.sid, "set", first[:7], "--page", str(tmp / "one.html"), "--summary", str(tmp / "one.md"))
-        self.assertIn(f"{first[:10]},{first[:7]} Parse rows with csv", out)
+        # TOON quotes a cell that reads as a number, and a short sha like 18679e7363 does (scientific notation)
+        self.assertIn(f"{toon(first[:10])},{toon(first[:7] + ' Parse rows with csv')}", out)
         self.rd("story", self.sid, "set", "uncommitted", "--page", str(tmp / "rest.html"), "--summary", str(tmp / "rest.md"))
         code, out, _ = self.rd_full("story", self.sid, "set", "0" * 7, "--page", str(tmp / "one.html"), check=False)
         self.assertEqual(code, 1)
