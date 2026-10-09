@@ -18,6 +18,8 @@ with two or more commits the skill writes one summary per commit.
 A turn starts at the last real user prompt in the transcript. Edits to scratch locations
 (memory, plans, temp dirs outside the session cwd) do not count. Any parsing failure exits 0 so a hook bug never blocks work.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import os
